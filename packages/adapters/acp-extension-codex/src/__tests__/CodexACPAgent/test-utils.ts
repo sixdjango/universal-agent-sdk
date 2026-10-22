@@ -1,0 +1,98 @@
+import { vi, expect } from 'vitest';
+import {mockProjectTrust} from '../acp-test-utils';
+import type { CodexAcpServer } from '../../CodexAcpServer';
+
+export interface MockConnections {
+    mockAcpConnection: any;
+    mockCodexConnection: any;
+    notificationHandlers: Map<string, Function>;
+    getUnhandledNotificationHandler: () => Function | null;
+    /** The handler `CodexAppServerClient` registered for a `vscode-jsonrpc` `RequestType` (by its `.method`). */
+    getRequestHandler: (method: string) => Function | null;
+}
+
+export function createMockConnections(): MockConnections {
+    mockProjectTrust();
+    const notificationHandlers = new Map<string, Function>();
+    const requestHandlers = new Map<string, Function>();
+    let unhandledNotificationHandler: Function | null = null;
+
+    const mockAcpConnection = {
+        sessionUpdate: vi.fn().mockResolvedValue(undefined),
+        readTextFile: vi.fn().mockResolvedValue({ content: 'file content' }),
+    };
+
+    const mockCodexConnection = {
+        sendRequest: vi.fn(),
+        onClose: vi.fn(() => ({dispose: () => {}})),
+        onDispose: vi.fn(() => ({dispose: () => {}})),
+        onUnhandledNotification: vi.fn((handler: Function) => {
+            unhandledNotificationHandler = handler;
+        }),
+        onNotification: vi.fn((method: string, handler: Function) => {
+            notificationHandlers.set(method, handler);
+        }),
+        onRequest: vi.fn((type: {method: string}, handler: Function) => {
+            requestHandlers.set(type.method, handler);
+        }),
+        end: vi.fn(),
+    };
+
+    return {
+        mockAcpConnection,
+        mockCodexConnection,
+        notificationHandlers,
+        getUnhandledNotificationHandler: () => unhandledNotificationHandler,
+        getRequestHandler: (method: string) => requestHandlers.get(method) ?? null,
+    };
+}
+
+export async function startPromptForEventHandlers(
+    agent: CodexAcpServer,
+    sessionId: string,
+    mocks: MockConnections
+): Promise<() => Promise<void>> {
+    mocks.mockCodexConnection.sendRequest.mockResolvedValue(undefined);
+
+    const promptPromise = agent.prompt({
+        sessionId,
+        prompt: [{ type: 'text', text: 'test' }],
+    });
+
+    // wait for handlers to be registered
+    await vi.waitFor(() => {
+        expect(mocks.getUnhandledNotificationHandler()).not.toBeNull();
+    }, { timeout: 1000 });
+
+    return async () => {
+        const taskCompleteHandler = mocks.notificationHandlers.get('codex/event/task_complete');
+        if (taskCompleteHandler) {
+            taskCompleteHandler({ type: 'task_complete' });
+        }
+        await promptPromise;
+    };
+}
+
+export async function triggerEvent(mocks: MockConnections, event: any): Promise<void> {
+    const handler = mocks.getUnhandledNotificationHandler();
+    if (!handler) {
+        throw new Error('No unhandled notification handler registered. Did you call startPromptForEventHandlers?');
+    }
+    await handler({ params: { msg: event } });
+}
+
+export async function testEventHandling(
+    agent: CodexAcpServer,
+    sessionId: string,
+    mocks: MockConnections,
+    events: any | any[]
+): Promise<void> {
+    const completePrompt = await startPromptForEventHandlers(agent, sessionId, mocks);
+
+    const eventArray = Array.isArray(events) ? events : [events];
+    for (const event of eventArray) {
+        await triggerEvent(mocks, event);
+    }
+
+    await completePrompt();
+}

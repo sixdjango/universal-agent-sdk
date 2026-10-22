@@ -1,0 +1,24 @@
+{
+  "officialRuntime": {
+    "package": "@xai-official/grok",
+    "version": "1.0.46",
+    "minimumSupportedVersion": "1.0.34"
+  },
+  "privateWireContract": {
+    "permissionNotification": "x.ai/yolo_mode_changed",
+    "sessionConfigMeta": "x.ai/sessionConfig",
+    "sessionNotification": "x.ai/session_notification",
+    "sessionUpdateNotification": "x.ai/session/update",
+    "modelsUpdateNotification": "x.ai/models/update",
+    "userMessageEchoCapability": "x.ai/userMessageEcho",
+    "turnCompletedUpdate": "turn_completed",
+    "sessionForkRequest": "x.ai/session/fork",
+    "sessionInfoRequest": "x.ai/session/info",
+    "billingRequest": "x.ai/billing",
+    "weeklyUsagePeriodType": "USAGE_PERIOD_TYPE_WEEKLY",
+    "reasoningEffortMeta": "reasoningEffort",
+    "autoPermissionMode": true,
+    "autoPermissionMinimumVersion": "1.0.46",
+    "planApprovalRequest": "x.ai/exit_plan_mode"
+  }
+}

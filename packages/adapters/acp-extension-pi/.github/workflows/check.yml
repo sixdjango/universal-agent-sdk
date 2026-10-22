@@ -1,0 +1,67 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:native
+        if: runner.os == 'Windows'
+      - run: pnpm check
+      - run: pnpm build
+      - run: pnpm smoke
+      - run: pnpm pack --pack-destination "$RUNNER_TEMP/pi-package"
+      - run: npm install --prefix "$RUNNER_TEMP/pi-install" --ignore-scripts --omit=dev "$RUNNER_TEMP"/pi-package/*.tgz
+      - run: node scripts/smoke.mjs "$RUNNER_TEMP/pi-install/node_modules/acp-extension-pi/dist/index.js"
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Windows'
+        with:
+          node-version: 24
+      - name: Installed native module on Node 24 without rebuilding
+        if: runner.os == 'Windows'
+        run: node scripts/smoke.mjs "$RUNNER_TEMP/pi-install/node_modules/acp-extension-pi/dist/index.js"
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: native-${{ runner.arch }}
+          path: native/*.node
+          if-no-files-found: error
+  package:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native
+          merge-multiple: true
+      - name: Require both Windows architectures in the distributable
+        run: pnpm prepublishOnly
+      - run: pnpm pack --pack-destination "$RUNNER_TEMP/pi-package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acp-extension-pi
+          path: ${{ runner.temp }}/pi-package/*.tgz
+          if-no-files-found: error

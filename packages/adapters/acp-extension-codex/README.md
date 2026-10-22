@@ -1,0 +1,189 @@
+# ACP adapter for Codex CLI
+
+[![npm version](https://img.shields.io/npm/v/acp-extension-codex)](https://www.npmjs.com/package/acp-extension-codex)
+
+Use [OpenAI Codex](https://github.com/openai/codex) from [Agent Client Protocol](https://agentclientprotocol.com/) clients.
+
+`acp-extension-codex` is a stdio ACP agent server. It starts the Codex App Server, translates ACP requests into Codex operations, and maps Codex events back into the client.
+
+## Features
+
+- ChatGPT, API key, and client-provided custom gateway authentication.
+- Model, reasoning effort, fast mode, approval, and sandbox mode configuration.
+- Concrete recommended model and reasoning-effort values through the opt-in [AIR recommended config values](docs/recommended-config-values-extension.md) capability.
+- Text prompts, embedded context, images, resource links, and additional workspace directories.
+- Shell command, file change, [permission request](docs/permission-extension.md), MCP tool call, terminal output, reasoning, plan, web search, image generation, image view, token usage, and review events.
+- [Native ACP subagent sessions](docs/subagent-sessions.md) (after capability negotiation) with separate child histories and root-routed permissions; a legacy tool-call fallback otherwise.
+- [Background terminal tasks](docs/async-tasks.md) in AIR, with task status and targeted stop support after capability negotiation.
+- Without native subagent negotiation, subagent launches remain standard ACP tool calls with provider-neutral lifecycle data in `_meta.lody.task`; Codex thread details remain available in `_meta.codex`.
+- Session-scoped long-running goals through the provider-neutral [goal extension](docs/goal-extension.md).
+- A per-turn [agent file-change report](docs/agent-file-change-report.md) after capability negotiation.
+- Client-provided MCP servers over command-based stdio config and HTTP transport.
+- Native ACP session forking through Codex App Server `thread/fork`.
+- Acknowledged steering of an active Codex turn through app-server `turn/steer`.
+- Slash commands: `/status`, `/mcp` (with `/mcp reconnect`), `/skills`, `/goal`, `/review`, `/review-branch`, `/review-commit`, `/compact`, and `/logout`, as well as configured skills.
+
+## Installation
+
+Run the published package directly:
+
+```bash
+npx -y acp-extension-codex
+```
+
+Or install it globally:
+
+```bash
+npm install -g acp-extension-codex
+acp-extension-codex --version
+```
+
+The npm package includes a compatible `@openai/codex` dependency. Set `CODEX_PATH` only when you want the adapter to run a different Codex binary:
+
+```bash
+CODEX_PATH=/path/to/codex npx -y acp-extension-codex
+```
+
+## Authentication
+
+The adapter advertises ACP auth methods during initialization. Clients can authenticate with:
+
+- ChatGPT login. Set `NO_BROWSER=1` to hide this method in remote or browserless environments.
+- API key via `CODEX_API_KEY` or `OPENAI_API_KEY`.
+- A custom OpenAI-compatible gateway, when the client opts in to the gateway auth capability.
+
+## Lody extensions
+
+The initialize response advertises versioned capabilities under
+`agentCapabilities._meta.lody`. Methods and payloads come from
+`acp-extension-core`; this includes usage and rate-limit reporting, an independent
+rate-limit query, acknowledged steering, goals, subagent/background-task lifecycle,
+compaction lifecycle, and history reads. ACP-standard plans, elicitation, session
+forking, and context-window usage stay on their standard protocol paths.
+
+For a managed ChatGPT profile, new, resume, fork, and stable load keep saved
+credentials on native refresh failure. A reused refresh token yields ACP error
+data with `kind: "codex_refresh_contention"` so Lody can retry session startup
+once in a fresh process. Other refresh failures carry no retry marker. Legacy
+`session/load` keeps its original error behavior and does not auto-logout.
+
+Usage reporting assigns differences between native root-thread token snapshots
+to the model selected for the submitted turn. Cache/input/output/reasoning buckets
+remain disjoint. Each native turn reports its own cumulative totals, tagged with
+notification-local `_meta.lody.usageScopeId` (Core usage scope; the legacy duplicate
+`_meta.codex.usageTurnId` remains for older clients); Lody's matching CLI uses a stable
+per-turn persistence identity so repeated delivery cannot count a turn twice.
+Each update's `delta` is that notification's own increment, already included in
+the turn totals.
+
+Only the preceding native snapshot and current turn are held in memory. There is
+no sidecar, historical model ledger or session metadata baseline. Native resume
+snapshots are comparison points, not new usage; when unavailable, the first
+notification is conservatively skipped. Subagents are not summed into the root,
+and native resets, reroutes and crash recovery are best effort rather than exact
+billing. A mid-turn UI selection change applies to the next submitted turn.
+
+The adapter and Lody CLI must be deployed together for turn-scoped usage.
+Unmarked older adapters keep their existing accounting scope. Old development
+sidecars and persisted history are neither read nor automatically migrated.
+
+Codex steering uses `_lody/session/steer` and confirms application with
+`_lody/session/steer_applied`. It keeps the active turn's model, mode, and
+configuration; slash commands cannot be steered.
+
+Acknowledged steering is inject-or-refuse. When no turn can accept input, the
+adapter rejects with JSON-RPC `invalid request` (`-32600`), proving that the
+message was not delivered. Lody requeues that same message as an ordinary
+`session/prompt` after the current prompt finishes; the adapter never starts a
+detached replacement turn. Internal and transport errors remain ambiguous unless
+matching live or persisted user-message evidence confirms application; a missing
+history item does not prove non-delivery. `injected` is submission, not application; only
+the correlated `steer_applied` notification transfers logical output ownership.
+
+Review commands and manual `/compact` retain the ACP prompt during cancellation
+until native completion or connection closure. Cancellation during startup waits
+for the native turn id before interrupting it; an interrupt acknowledgement alone
+does not allow another prompt to start.
+
+## Runtime options
+
+- `CODEX_API_KEY` - API key used when the API-key auth method is selected. Takes precedence over `OPENAI_API_KEY`.
+- `OPENAI_API_KEY` - fallback API key used when the API-key auth method is selected.
+- `CODEX_PATH` - run a specific Codex executable instead of the bundled package dependency.
+- `CODEX_CONFIG` - JSON object merged into the Codex session config.
+- `MODEL_PROVIDER` - model provider to pass to Codex for new sessions.
+- `DEFAULT_AUTH_REQUEST` - ACP auth request JSON used when Codex requires authentication.
+- `INITIAL_AGENT_MODE` - initial mode id: `read-only`, `agent`, `agent-auto-review`, or `agent-full-access`.
+- `NO_BROWSER` - hide browser-based ChatGPT auth when set.
+- `APP_SERVER_LOGS` - directory for adapter logs.
+
+## Development
+
+```bash
+npm install
+npm run start
+npm run typecheck
+npm test
+```
+
+Build standalone binaries in `dist/bin` with:
+
+```bash
+npm run bundle:all
+```
+
+See [readme-dev.md](readme-dev.md) for local client configuration, binary packaging, and Codex type regeneration.
+
+### Subagent sessions
+
+Subagent sessions follow the draft [ACP subagent RFD](https://github.com/agentclientprotocol/agent-client-protocol/pull/1992) and are enabled only after bilateral capability negotiation during `initialize`. Without native negotiation, the subagent lifecycle stays an ordinary ACP tool call.
+
+See [docs/subagent-sessions.md](docs/subagent-sessions.md) for the negotiation, lifecycle events, `session/load` reconstruction, and legacy fallback details.
+
+### Background terminal tasks
+
+Codex can keep a shell command running after a turn continues. AIR clients can show this work in the Async Tasks panel and stop one command.
+
+See [docs/async-tasks.md](docs/async-tasks.md) for the capability, lifecycle events, and stop request.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the Apache 2.0 License.
+
+### Local project worktrees
+
+The adapter advertises Core `worktreeProject: { version: 1 }`. Clients can attach
+`_meta.lody.worktreeProject: { version: 1, originProjectPath: "/original/project" }` when
+creating, loading, resuming, or forking a session, while passing the actual
+worktree path as ACP `cwd`. This requires the project APIs in the pinned Codex
+0.156.0 runtime; older `CODEX_PATH` overrides may not support them.
+
+The adapter derives a deterministic native project identity from the canonical
+Lody project root and relies on Codex `project/create` idempotency for persistence
+across sessions and adapter processes. It does not inspect or reuse user-created
+projects by root, so multiple Codex projects may share that folder without making
+Lody resolution ambiguous. If an adapter-owned project was deleted, the adapter
+advances through a bounded sequence of deterministic generation keys (`:g1`, `:g2`,
+and so on) until Codex creates or returns the first live generation. It never guesses
+a replacement from matching roots, and generation 0 keeps the original key for
+compatibility.
+
+New sessions receive the deterministic project directly in `thread/start`.
+Existing native thread project assignments remain authoritative on load, resume,
+and fork; only unassigned threads are backfilled. Already persisted sessions are
+backfilled when reopened, and there is no bulk migration of unrelated history.
+
+Grouping keeps execution, permissions, and worktree cleanup with their existing
+owners. It does not enable Codex-managed worktree badges or Handoff. Standard
+`session/list.cwd` still filters execution directories. `ProjectApi.ts` contains
+the narrow experimental native API subset omitted by stable type generation.
+
+## Session titles
+
+Automatic title generation belongs to the ACP client. The adapter does not start
+an auxiliary model turn and does not advertise Core `sessionTitle`. Lody exposes
+its independent title session's model, reasoning, and permissions in Provider settings.
+
+Native name updates remain ACP `session_info_update` notifications tagged
+`_meta.lody.titleSource: "explicit"`. Prompt previews remain `fallback` and cleared
+names `unset`; clients must not treat prompt previews as generated titles.

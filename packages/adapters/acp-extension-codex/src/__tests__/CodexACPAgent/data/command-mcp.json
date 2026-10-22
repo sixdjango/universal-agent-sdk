@@ -1,0 +1,15 @@
+{
+  "method": "sessionUpdate",
+  "args": [
+    {
+      "sessionId": "sessionId",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "**MCP servers:** 2 (2 unknown)\n\n**Unknown**\n- `fs`: 1 tool\n- `browser`: not signed in"
+        }
+      }
+    }
+  ]
+}

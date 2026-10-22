@@ -1,0 +1,15 @@
+{
+  "method": "sessionUpdate",
+  "args": [
+    {
+      "sessionId": "test-session-id",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "command-list-no-path",
+        "kind": "read",
+        "title": "List files",
+        "status": "completed"
+      }
+    }
+  ]
+}

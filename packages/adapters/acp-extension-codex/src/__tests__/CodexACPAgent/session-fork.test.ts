@@ -1,0 +1,241 @@
+import {describe, expect, it, vi} from "vitest";
+import type {McpServerStdio} from "@agentclientprotocol/sdk";
+import {forkSession} from "../../SessionFork";
+import {createCodexMockTestFixture, createTestModel} from "../acp-test-utils";
+import type {McpStartupResult} from "../../mcp/McpStartupTracker";
+
+describe("ACP session fork", () => {
+    it("maps the Lody turn fork point to thread/fork", async () => {
+        const fixture = createCodexMockTestFixture();
+        const codexAcpClient = fixture.getCodexAcpClient();
+        const codexAppServerClient = fixture.getCodexAppServerClient();
+        const model = createTestModel();
+        const mcpServer: McpServerStdio = {
+            name: "fork-mcp",
+            command: "node",
+            args: ["server.js"],
+            env: [{name: "TOKEN", value: "test-token"}],
+        };
+
+        vi.spyOn(codexAppServerClient, "skillsExtraRootsSet").mockResolvedValue(undefined);
+        vi.spyOn(codexAppServerClient, "listSkills").mockResolvedValue({data: []});
+        vi.spyOn(codexAppServerClient, "configRead").mockResolvedValue({config: {}} as never);
+        const threadForkSpy = vi.spyOn(codexAppServerClient, "threadFork").mockResolvedValue({
+            thread: {id: "child-session-id"},
+            model: model.id,
+            modelProvider: "openai",
+            serviceTier: null,
+            reasoningEffort: "medium",
+        } as never);
+        const unsubscribeSpy = vi.spyOn(codexAppServerClient, "threadUnsubscribe").mockResolvedValue({} as never);
+        vi.spyOn(codexAppServerClient, "listModels").mockResolvedValue({
+            data: [model],
+            nextCursor: null,
+        });
+
+        const result = await codexAcpClient.forkSession({
+            sessionId: "source-session-id",
+            cwd: "/workspace",
+            additionalDirectories: ["/workspace/extra"],
+            mcpServers: [mcpServer],
+            _meta: {
+                lody: {
+                    forkAtTurn: {
+                        version: 1,
+                        turnId: "completed-turn-id",
+                    },
+                },
+            },
+        });
+
+        expect(result).toEqual({
+            sessionId: "child-session-id",
+            skippedMcpServers: [],
+            currentModelId: "model-id[medium]",
+            models: [model],
+            collaborationMode: "default",
+            modelProvider: "openai",
+            currentServiceTier: null,
+            additionalDirectories: ["/workspace/extra"],
+        });
+        expect(threadForkSpy).toHaveBeenCalledWith({
+            excludeTurns: true,
+            threadId: "source-session-id",
+            lastTurnId: "completed-turn-id",
+            cwd: "/workspace",
+            modelProvider: "openai",
+            config: {
+                features: {cwd_relative_turn_diffs: false},
+                projects: {
+                    "/workspace": {trust_level: "trusted"},
+                    "/workspace/extra": {trust_level: "trusted"},
+                },
+                sandbox_workspace_write: {
+                    writable_roots: ["/workspace/extra"],
+                },
+                mcp_servers: {
+                    "fork-mcp": {
+                        command: "node",
+                        args: ["server.js"],
+                        env: {TOKEN: "test-token"},
+                    },
+                },
+            },
+        });
+        expect(unsubscribeSpy).not.toHaveBeenCalled();
+    });
+
+    it("unsubscribes the child only when install fails after thread/fork", async () => {
+        const threadUnsubscribe = vi.fn().mockResolvedValue({status: "unsubscribed"});
+        const backfillError = new Error("backfill failed");
+        await expect(
+            forkSession(
+                {sessionId: "source-session-id", cwd: "/workspace", mcpServers: []},
+                [],
+                {
+                    codexClient: {
+                        threadFork: vi.fn().mockResolvedValue({
+                            thread: {id: "child-session-id"},
+                            model: "gpt-5",
+                            modelProvider: "openai",
+                            reasoningEffort: "medium",
+                            serviceTier: null,
+                        }),
+                        threadUnsubscribe,
+                    } as never,
+                    releaseFailedFork: async threadId => { await threadUnsubscribe({threadId}); },
+                    backfillProject: vi.fn().mockRejectedValue(backfillError),
+                    forkCreated: vi.fn(),
+                    createSessionConfig: vi.fn().mockResolvedValue({}),
+                    getResumeModelProvider: vi.fn().mockResolvedValue("openai"),
+                    fetchAvailableModels: vi.fn(),
+                    createCurrentModelId: vi.fn(),
+                    getCollaborationMode: vi.fn(),
+                },
+            ),
+        ).rejects.toBe(backfillError);
+        expect(threadUnsubscribe).toHaveBeenCalledTimes(1);
+        expect(threadUnsubscribe).toHaveBeenCalledWith({threadId: "child-session-id"});
+    });
+
+    it("creates and installs a forked session", async () => {
+        const fixture = createCodexMockTestFixture();
+        const agent = fixture.getCodexAcpAgent();
+        const client = fixture.getCodexAcpClient();
+        const model = createTestModel({id: "gpt-5"});
+
+        vi.spyOn(client, "readAuthRequirement").mockResolvedValue({required: false, account: null});
+        vi.spyOn(client, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
+        vi.spyOn(client, "listSkills").mockResolvedValue({data: []});
+        const forkSpy = vi.spyOn(client, "forkSession").mockResolvedValue({
+            sessionId: "fork-id",
+            currentModelId: "gpt-5[medium]",
+            models: [model],
+            collaborationMode: "default",
+            modelProvider: "openai",
+            currentServiceTier: null,
+            additionalDirectories: [],
+            skippedMcpServers: [],
+        });
+
+        const response = await agent.forkSession({
+            sessionId: "source-id",
+            cwd: "/workspace",
+            mcpServers: [],
+        });
+
+        expect(response.sessionId).toBe("fork-id");
+        expect(agent.getSessionState("fork-id").cwd).toBe("/workspace");
+        expect(fixture.getAcpConnectionEvents([])).toEqual([
+            {
+                method: "notify",
+                args: ["_auth/status_update", {authStatus: {kind: "none", label: "Not logged in"}}],
+            },
+        ]);
+        expect(forkSpy).toHaveBeenCalledWith({
+            sessionId: "source-id",
+            cwd: "/workspace",
+            mcpServers: [],
+        }, expect.any(Function), expect.any(Function));
+        // Regression pin: v1 must keep sending `modes` (v2 drops it via `forkSessionV2`).
+        expect(response.modes).toBeDefined();
+    });
+
+    it("waits for MCP startup before completing session fork", async () => {
+        const fixture = createCodexMockTestFixture();
+        const agent = fixture.getCodexAcpAgent();
+        const client = fixture.getCodexAcpClient();
+        const mcpStartup = deferred<McpStartupResult>();
+
+        vi.spyOn(client, "readAuthRequirement").mockResolvedValue({required: false, account: null});
+        vi.spyOn(client, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
+        vi.spyOn(client, "listSkills").mockResolvedValue({data: []});
+        vi.spyOn(client, "forkSession").mockResolvedValue({
+            sessionId: "fork-id",
+            currentModelId: "gpt-5[medium]",
+            models: [createTestModel({id: "gpt-5"})],
+            collaborationMode: "default",
+            currentServiceTier: null,
+            additionalDirectories: [],
+            skippedMcpServers: [],
+        });
+        const awaitMcpStartupSpy = vi.spyOn(client, "awaitMcpServerStartup")
+            .mockReturnValue(mcpStartup.promise);
+
+        const forkPromise = agent.forkSession({
+            sessionId: "source-id",
+            cwd: "/workspace",
+            mcpServers: [{name: "fork-mcp", command: "npx", args: ["fork"], env: []}],
+            _meta: {mcpStartupAwaitTimeoutMs: 30_000},
+        });
+        let forkSettled = false;
+        void forkPromise.then(
+            () => { forkSettled = true; },
+            () => { forkSettled = true; },
+        );
+
+        await vi.waitFor(() => {
+            expect(awaitMcpStartupSpy).toHaveBeenCalledWith(["fork-mcp"], expect.any(Number), {threadId: "fork-id", signal: expect.any(AbortSignal)});
+        });
+        expect(forkSettled).toBe(false);
+
+        mcpStartup.resolve({ready: ["fork-mcp"], failed: [], cancelled: []});
+        await expect(forkPromise).resolves.toMatchObject({sessionId: "fork-id", modes: expect.any(Object)});
+    });
+
+    it("leaves no MCP startup wait after a fork without the startup wait", async () => {
+        const fixture = createCodexMockTestFixture();
+        const agent = fixture.getCodexAcpAgent();
+        const client = fixture.getCodexAcpClient();
+
+        vi.spyOn(client, "readAuthRequirement").mockResolvedValue({required: false, account: null});
+        vi.spyOn(client, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
+        vi.spyOn(client, "listSkills").mockResolvedValue({data: []});
+        vi.spyOn(client, "forkSession").mockResolvedValue({
+            sessionId: "fork-id",
+            currentModelId: "gpt-5[medium]",
+            models: [createTestModel({id: "gpt-5"})],
+            collaborationMode: "default",
+            currentServiceTier: null,
+            additionalDirectories: [],
+            skippedMcpServers: [],
+        });
+
+        await agent.forkSession({
+            sessionId: "source-id",
+            cwd: "/workspace",
+            mcpServers: [{name: "fork-mcp", command: "npx", args: ["fork"], env: []}],
+        });
+
+        const tracker = client.appServerClient.mcpStartup as unknown as {waiters: unknown[]};
+        expect(tracker.waiters).toHaveLength(0);
+    });
+});
+
+function deferred<T>(): {promise: Promise<T>, resolve: (value: T) => void} {
+    let resolve: (value: T) => void = () => {};
+    const promise = new Promise<T>((innerResolve) => {
+        resolve = innerResolve;
+    });
+    return {promise, resolve};
+}

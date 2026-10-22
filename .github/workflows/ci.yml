@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    name: Build, Typecheck & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Build all packages & adapters
+        run: pnpm build
+
+      - name: Verify flat adapter entry outputs exist
+        shell: bash
+        run: |
+          for entry in index claude-acp codex-acp kimi-acp deepseek-acp grok-acp devin-acp pi-acp; do
+            test -f "packages/agent-client/dist/${entry}.js"
+          done
+          test -d "packages/agent-client/dist/deepseek-agent-presets"
+
+      - name: Audit zero @lody/* dependencies
+        shell: bash
+        run: |
+          if pnpm -r exec pnpm why @lody/shared 2>/dev/null | grep -q '@lody/'; then
+            echo "Unexpected @lody/* dependency found"
+            exit 1
+          fi
+
+      - name: Typecheck workspace
+        run: pnpm typecheck
+
+      - name: Run unit tests
+        run: pnpm test

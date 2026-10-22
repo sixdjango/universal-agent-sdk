@@ -1,0 +1,44 @@
+{
+  "name": "@universal-agent/acp-extension-devin",
+  "version": "0.1.0",
+  "description": "ACP compatibility adapter for the official Devin runtime",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "acp-extension-devin": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "runtime-manifest.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LodyAI/acp-extension-devin.git"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "packageManager": "pnpm@10.20.0",
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist",
+    "format": "prettier --write .",
+    "check": "pnpm typecheck && pnpm test && prettier --check .",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.5.0",
+    "acp-extension-core": "workspace:@universal-agent/acp-extension-core@*",
+    "@universal-agent/acp-extension-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "prettier": "^3.9.9",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

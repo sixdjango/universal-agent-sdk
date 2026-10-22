@@ -1,0 +1,35 @@
+{
+  "name": "@universal-agent/acp-extension-grok",
+  "version": "0.1.4",
+  "description": "ACP compatibility adapter for the official Grok runtime",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "acp-extension-grok": "src/index.js"
+  },
+  "files": [
+    "src",
+    "scripts",
+    "runtime-manifest.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node --check src/index.js && node --check src/proxy.js && node --check src/runtime-process.js && node --check src/plan-review.js && node --check src/session-fork.js && node --check src/subagent-events.js",
+    "test": "node scripts/test.mjs",
+    "typecheck": "node --check src/index.js && node --check src/proxy.js && node --check src/runtime-process.js && node --check src/plan-review.js && node --check src/session-fork.js && node --check src/subagent-events.js",
+    "clean": "node -e \"\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LodyAI/acp-extension-grok.git"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "dependencies": {
+    "acp-extension-core": "workspace:@universal-agent/acp-extension-core@*",
+    "@universal-agent/acp-extension-core": "workspace:*"
+  }
+}

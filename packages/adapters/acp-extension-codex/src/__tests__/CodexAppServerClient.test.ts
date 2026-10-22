@@ -1,0 +1,229 @@
+import { describe, expect, it, vi } from "vitest";
+import type { MessageConnection } from "vscode-jsonrpc/node";
+import { CodexAppServerClient } from "../CodexAppServerClient";
+import type { ReviewStartParams, TurnStartParams } from "../app-server/v2";
+import type { ServerNotification } from "../app-server";
+
+describe("CodexAppServerClient turn lifecycle", () => {
+    function compactHarness(sendRequest: () => Promise<unknown> = async () => ({})) {
+        let notify: (event: ServerNotification) => void = () => {};
+        let close: () => void = () => {};
+        const client = new CodexAppServerClient({
+            onClose: (listener: () => void) => { close = listener; return {dispose() {}}; },
+            onDispose: () => ({dispose() {}}),
+            onUnhandledNotification: (listener: typeof notify) => { notify = listener; return {dispose() {}}; },
+            onRequest: vi.fn(),
+            sendRequest,
+        } as unknown as MessageConnection);
+        const turn = (id: string, status: "inProgress" | "completed" | "interrupted" | "failed") => ({
+            id, status, items: [], itemsView: "notLoaded" as const,
+            error: null, startedAt: null, completedAt: null, durationMs: null,
+        });
+        return {
+            client,
+            notify: (event: ServerNotification) => notify(event),
+            close: () => close(),
+            start: (threadId = "thread-1", turnId = "compact-1") => notify({
+                method: "turn/started", params: {threadId, turn: turn(turnId, "inProgress")},
+            }),
+            finish: (status: "completed" | "interrupted" | "failed", threadId = "thread-1", turnId = "compact-1") => notify({
+                method: "turn/completed", params: {threadId, turn: turn(turnId, status)},
+            }),
+        };
+    }
+
+    it("completes fork on the response without waiting for accounting replay", async () => {
+        const response = {thread: {id: "child"}};
+        const h = compactHarness(async () => response);
+        await expect(h.client.threadFork({threadId: "parent"})).resolves.toEqual(response);
+    });
+
+    it.each(["completed", "interrupted", "failed"] as const)("settles compact from its native %s turn, even before the start ACK", async (status) => {
+        let acknowledge: () => void = () => {};
+        const ack = new Promise<void>(resolve => { acknowledge = resolve; });
+        const h = compactHarness(() => ack);
+        let ownedTurn: string | undefined;
+        let settled = false;
+        const compact = h.client.runCompact({threadId: "thread-1"}, id => { ownedTurn = id; })
+            .then(result => { settled = true; return result; });
+        h.start("another-thread", "other-turn");
+        expect(ownedTurn).toBeUndefined();
+        h.start();
+        expect(ownedTurn).toBe("compact-1");
+        h.finish("completed", "thread-1", "previous-turn");
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        h.finish(status);
+        acknowledge();
+        await expect(compact).resolves.toMatchObject({threadId: "thread-1", turn: {id: "compact-1", status}});
+    });
+
+    it("keeps compact pending after a local interrupted completion until its native terminal event", async () => {
+        vi.useFakeTimers();
+        try {
+            const h = compactHarness();
+            let settled = false;
+            const compact = h.client.runCompact({threadId: "thread-1"})
+                .then(result => { settled = true; return result; });
+            h.start();
+            h.client.resolveTurnInterrupted("thread-1", "compact-1");
+            await vi.advanceTimersByTimeAsync(0);
+            expect(settled).toBe(false);
+            h.finish("interrupted");
+            await expect(compact).resolves.toMatchObject({turn: {status: "interrupted"}});
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([
+        {started: false, acknowledged: false},
+        {started: false, acknowledged: true},
+        {started: true, acknowledged: false},
+        {started: true, acknowledged: true},
+    ])("rejects compact on process exit (started: $started, acknowledged: $acknowledged)", async ({started, acknowledged}) => {
+        const h = compactHarness(() => acknowledged ? Promise.resolve({}) : new Promise(() => {}));
+        const compact = h.client.runCompact({threadId: "thread-1"});
+        if (started) h.start();
+        h.close();
+        await expect(compact).rejects.toThrow("The connection to the Codex app-server was lost while waiting for the end of the turn.");
+    });
+
+    it("releases a rejected compact start so a later request can run", async () => {
+        let rejectStart = true;
+        const h = compactHarness(async () => {
+            if (rejectStart) throw new Error("compact start rejected");
+            return {};
+        });
+        await expect(h.client.runCompact({threadId: "thread-1"})).rejects.toThrow("compact start rejected");
+        rejectStart = false;
+        const next = h.client.runCompact({threadId: "thread-1"});
+        h.start();
+        h.finish("completed");
+        await expect(next).resolves.toMatchObject({turn: {status: "completed"}});
+    });
+
+    it("rejects when the process closes after turn/start but before completion registration", async () => {
+        let closeConnection: (() => void) | undefined;
+        const connection = {
+            onClose: (listener: () => void) => {
+                closeConnection = listener;
+                return { dispose: () => {} };
+            },
+            onDispose: () => ({ dispose: () => {} }),
+            onUnhandledNotification: () => ({ dispose: () => {} }),
+            onRequest: vi.fn(),
+            sendRequest: vi.fn(async (method: string) => {
+                if (method === "turn/start") {
+                    return { turn: { id: "turn-1" } };
+                }
+                return undefined;
+            }),
+        } as unknown as MessageConnection;
+        const client = new CodexAppServerClient(connection);
+
+        const turn = client.runTurn(
+            { threadId: "thread-1", input: [] } as unknown as TurnStartParams,
+            () => closeConnection?.(),
+        );
+
+        await expect(turn).rejects.toThrow("The connection to the Codex app-server was lost while waiting for the end of the turn.");
+    });
+
+    it("buffers a native review start that arrives before the review response", async () => {
+        let notify: (event: ServerNotification) => void = () => {};
+        const turn = (id: string, status: "inProgress" | "interrupted") => ({
+            id, status, items: [], itemsView: "notLoaded" as const,
+            error: null, startedAt: null, completedAt: null, durationMs: null,
+        });
+        let acknowledgeReview: (response: unknown) => void = () => {};
+        const reviewResponse = new Promise<unknown>(resolve => { acknowledgeReview = resolve; });
+        const connection = {
+            onClose: () => ({dispose() {}}),
+            onDispose: () => ({dispose() {}}),
+            onUnhandledNotification: (listener: typeof notify) => { notify = listener; return {dispose() {}}; },
+            onRequest: vi.fn(),
+            sendRequest: vi.fn((method: string) => {
+                if (method === "review/start") {
+                    return reviewResponse;
+                }
+                return Promise.resolve(undefined);
+            }),
+        } as unknown as MessageConnection;
+        const client = new CodexAppServerClient(connection);
+        const started: Array<string> = [];
+        let observeStart: () => void = () => {};
+        const nativeStarted = new Promise<void>(resolve => { observeStart = resolve; });
+        const review = client.runReview(
+            {threadId: "thread-1", target: {type: "uncommittedChanges"}, delivery: "inline"} as ReviewStartParams,
+            (turnId) => { started.push(turnId); observeStart(); },
+        );
+
+        notify({method: "turn/started", params: {threadId: "thread-1", turn: turn("native-turn", "inProgress")} });
+        expect(started).toEqual([]);
+        acknowledgeReview({
+            reviewThreadId: "thread-1",
+            turn: turn("response-turn", "inProgress"),
+        });
+
+        await nativeStarted;
+        expect(started).toEqual(["native-turn"]);
+        notify({method: "turn/completed", params: {threadId: "thread-1", turn: turn("response-turn", "interrupted")} });
+
+        await expect(review).resolves.toMatchObject({
+            threadId: "thread-1",
+            turn: {id: "response-turn", status: "interrupted"},
+        });
+    });
+
+    it("does not treat an unrelated native terminal as the review completion", async () => {
+        let notify: (event: ServerNotification) => void = () => {};
+        const turn = (id: string, status: "inProgress" | "completed" | "interrupted") => ({
+            id, status, items: [], itemsView: "notLoaded" as const,
+            error: null, startedAt: null, completedAt: null, durationMs: null,
+        });
+        const connection = {
+            onClose: () => ({dispose() {}}),
+            onDispose: () => ({dispose() {}}),
+            onUnhandledNotification: (listener: typeof notify) => { notify = listener; return {dispose() {}}; },
+            onRequest: vi.fn(),
+            sendRequest: vi.fn(async (method: string) => method === "review/start"
+                ? {reviewThreadId: "thread-1", turn: turn("response-turn", "inProgress")}
+                : undefined),
+        } as unknown as MessageConnection;
+        const client = new CodexAppServerClient(connection);
+        let settled = false;
+        const review = client.runReview({
+            threadId: "thread-1", target: {type: "uncommittedChanges"}, delivery: "inline",
+        } as ReviewStartParams).then(result => { settled = true; return result; });
+
+        notify({method: "turn/started", params: {threadId: "thread-1", turn: turn("native-turn", "inProgress")} });
+        notify({method: "turn/completed", params: {threadId: "thread-1", turn: turn("other-turn", "completed")} });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        notify({method: "turn/completed", params: {threadId: "thread-1", turn: turn("response-turn", "interrupted")} });
+        await expect(review).resolves.toMatchObject({turn: {id: "response-turn", status: "interrupted"}});
+    });
+
+    it.each([false, true])("rejects review on connection closure (native start: %s)", async (started) => {
+        const h = compactHarness(async () => ({
+            reviewThreadId: "thread-1", turn: {id: "review-turn", status: "inProgress"},
+        }));
+        let registered: () => void = () => {};
+        const completionRegistered = new Promise<void>(resolve => { registered = resolve; });
+        const awaitTurnCompleted = h.client.awaitTurnCompleted.bind(h.client);
+        vi.spyOn(h.client, "awaitTurnCompleted").mockImplementation((threadId, turnId) => {
+            const result = awaitTurnCompleted(threadId, turnId);
+            registered();
+            return result;
+        });
+        const review = h.client.runReview({
+            threadId: "thread-1", target: {type: "uncommittedChanges"}, delivery: "inline",
+        });
+        const rejected = expect(review).rejects.toThrow("The connection to the Codex app-server was lost while waiting for the end of the turn.");
+        await completionRegistered;
+        if (started) h.start("thread-1", "native-review-turn");
+        h.close();
+        await rejected;
+    });
+});

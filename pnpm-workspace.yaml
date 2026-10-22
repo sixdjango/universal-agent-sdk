@@ -1,0 +1,5 @@
+packages:
+  - 'packages/acp-extension-core'
+  - 'packages/adapters/*'
+  - 'packages/agent-client'
+  - 'examples'

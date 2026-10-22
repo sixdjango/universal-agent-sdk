@@ -1,0 +1,35 @@
+{
+  "officialRuntime": {
+    "package": "devin",
+    "version": "3000.11.3",
+    "minimumSupportedVersion": "3000.11.1"
+  },
+  "privateWireContract": {
+    "sidekickToolCallMeta": "cognition.ai/sidekick",
+    "sidekickToolCallIdPrefix": "sk::",
+    "subagentContextMeta": "cognition.ai/subagent_context",
+    "subagentStartedMeta": "cognition.ai/subagent_started",
+    "subagentCompletedMeta": "cognition.ai/subagent_completed",
+    "subagentSupportClientCapability": "cognition.ai/subagentSupport",
+    "rootAgentId": "root",
+    "sidekickAgentId": "sidekick",
+    "toolNameMeta": "cognition.ai/toolName",
+    "inferenceToolNameMeta": "cognition.ai/inferenceToolName",
+    "compactionNotificationMethod": "_cognition.ai/compaction",
+    "compactionSessionIdField": "sessionId",
+    "compactionStatusField": "status",
+    "compactionSummaryField": "summary",
+    "compactionStartedStatus": "started",
+    "compactionCompletedStatus": "completed",
+    "compactionFailedStatus": "failed",
+    "compactionManualCommand": "/compact",
+    "elicitationAllowOtherMeta": "cognition.ai/allowOther",
+    "usageInputTokensMeta": "cognition.ai/inputTokens",
+    "usageOutputTokensMeta": "cognition.ai/outputTokens",
+    "usageCachedReadTokensMeta": "cognition.ai/cachedReadTokens",
+    "usageCachedWriteTokensMeta": "cognition.ai/cachedWriteTokens",
+    "usageTotalCreditCostMeta": "cognition.ai/totalCreditCost",
+    "usageTotalAcuCostMeta": "cognition.ai/totalAcuCost",
+    "usageResponseDimensionsMeta": "cognition.ai/responseDimensions"
+  }
+}

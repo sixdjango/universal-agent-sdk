@@ -1,0 +1,15 @@
+{
+  "method": "sessionUpdate",
+  "args": [
+    {
+      "sessionId": "test-session-id",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "command-search-path-only",
+        "kind": "search",
+        "title": "Search in '*service*'",
+        "status": "in_progress"
+      }
+    }
+  ]
+}

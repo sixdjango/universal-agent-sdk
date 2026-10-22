@@ -1,0 +1,29 @@
+{
+  "name": "universal-agent-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone Universal Agent Client SDK and ACP adapters",
+  "type": "module",
+  "scripts": {
+    "prepare:adapters": "pnpm --filter @universal-agent/acp-extension-core build && pnpm --filter './packages/adapters/*' build",
+    "build": "pnpm run prepare:adapters && pnpm --filter @universal-agent/client build",
+    "typecheck": "pnpm run prepare:adapters && pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "clean": "pnpm -r run clean"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "rolldown": "^1.2.15",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "acp-extension-core": "workspace:@universal-agent/acp-extension-core@*"
+    }
+  }
+}

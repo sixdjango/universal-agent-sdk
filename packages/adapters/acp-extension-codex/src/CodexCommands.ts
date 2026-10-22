@@ -1,0 +1,753 @@
+import {withAirMeta} from "./AirExtension";
+import type * as acp from "@agentclientprotocol/sdk";
+import {RequestError, type AvailableCommand} from "@agentclientprotocol/sdk";
+import {ACPSessionConnection, type AcpClientConnection} from "./ACPSessionConnection";
+import {AIR_COMMAND_ACTION_KEY, AIR_SKILL_PATH_KEY, airOnlyMeta} from "./AirExtension";
+import type {CodexAcpClient} from "./CodexAcpClient";
+import type {
+    RateLimitSnapshot,
+    ReviewTarget,
+    SkillsListEntry,
+    SkillsListParams,
+    TurnCompletedNotification,
+} from "./app-server/v2";
+import type {SessionState} from "./CodexAcpServer";
+import {createRateLimitsMap, type RateLimitsMap} from "./RateLimitsMap";
+import type {TokenCount} from "./TokenCount";
+import {logger} from "./Logger";
+import {MCP_COMMAND_INPUT_HINT, McpCommand} from "./mcp/McpCommand";
+import type {McpServerSignIn} from "./mcp/McpServerSignIn";
+import {createAgentTextMessageChunk} from "./ContentChunks";
+import {
+    LODY_PLAN_MODE_CONFIG_ID,
+    PLAN_COLLABORATION_MODE,
+} from "./CollaborationModeConfig";
+import {GOAL_EXTENSION_VERSION, type GoalPromptControl} from "./GoalExtension";
+
+type ParsedSlashCommand = {
+    name: string;
+    rest: string;
+};
+
+export type CommandHandleResult =
+    | { handled: false, prompt?: acp.ContentBlock[] }
+    // Review completion is authoritative for the standalone command; it must
+    // not be reinterpreted as an active goal continuation by the prompt layer.
+    | { handled: true, turnCompleted?: TurnCompletedNotification, waitForGoalContinuation?: boolean };
+
+/** Codex rejects longer objectives; fail before spending a turn on it. */
+const GOAL_OBJECTIVE_MAX_LENGTH = 4000;
+
+export type PromptKind =
+    | { kind: "prompt" }
+    | { kind: "localCommand", name: string }
+    | { kind: "codexTurnCommand", name: string };
+
+/** Native Codex owns goal continuation, including setup with no observed turn. */
+export function resolveGoalCommandHandleResult(
+    turnCompleted: TurnCompletedNotification | null,
+): CommandHandleResult {
+    if (turnCompleted !== null) {
+        return { handled: true, turnCompleted };
+    }
+    return { handled: true };
+}
+
+export type CommandHandleOptions = {
+    /** Aborts when the prompt ends. A command then sends no more updates. */
+    signal?: AbortSignal;
+    onTurnStartPending?: () => void;
+    onTurnStarted?: (turnId: string, threadId: string) => void;
+    onCommandAccepted?: () => void;
+    onNativeCommandStarted?: () => void;
+    onNativeCommandFinished?: () => void;
+    setConfigOption?: (configId: string, value: string | boolean) => Promise<void>;
+};
+
+export type LogoutHandler = () => void | Promise<void>;
+
+export class CodexCommands {
+    private readonly lastPublishedCommands = new WeakMap<SessionState, string>();
+    private readonly connection: AcpClientConnection;
+    private readonly codexAcpClient: CodexAcpClient;
+    private readonly runWithProcessCheck: <T>(operation: () => Promise<T>) => Promise<T>;
+    private readonly onLogout: LogoutHandler;
+    private readonly mcpCommand: McpCommand;
+
+    constructor(
+        connection: AcpClientConnection,
+        codexAcpClient: CodexAcpClient,
+        runWithProcessCheck: <T>(operation: () => Promise<T>) => Promise<T>,
+        onLogout: LogoutHandler,
+        mcpServerSignIn: McpServerSignIn,
+    ) {
+        this.connection = connection;
+        this.codexAcpClient = codexAcpClient;
+        this.runWithProcessCheck = runWithProcessCheck;
+        this.onLogout = onLogout;
+        this.mcpCommand = new McpCommand(codexAcpClient, runWithProcessCheck, mcpServerSignIn);
+    }
+
+    classifyPrompt(prompt: acp.ContentBlock[]): PromptKind {
+        const command = this.parseCommand(prompt);
+        if (command === null || command.name.startsWith("$")) return {kind: "prompt"};
+        switch (command.name) {
+            case "plan":
+                return this.planPrompt(prompt) === null
+                    ? {kind: "localCommand", name: command.name}
+                    : {kind: "prompt"};
+            case "status":
+            case "rename":
+            case "logout":
+            case "skills":
+            case "mcp":
+                return {kind: "localCommand", name: command.name};
+            case "compact":
+            case "review":
+                return {kind: "codexTurnCommand", name: command.name};
+            case "review-branch":
+            case "review-commit":
+                return command.rest.length === 0
+                    ? {kind: "localCommand", name: command.name}
+                    : {kind: "codexTurnCommand", name: command.name};
+            case "goal": {
+                const argument = command.rest.trim().toLowerCase();
+                if (argument.length === 0 || argument === "pause" || argument === "clear" || argument.length > 4000) {
+                    return {kind: "localCommand", name: command.name};
+                }
+                return {kind: "codexTurnCommand", name: command.name};
+            }
+            default:
+                return {kind: "prompt"};
+        }
+    }
+
+    async publish(
+        sessionState: SessionState,
+        availableCommands?: AvailableCommand[],
+        shouldPublish: () => boolean = () => true,
+        onlyChanges = false,
+    ): Promise<void> {
+        try {
+            if (!shouldPublish()) {
+                return;
+            }
+            const commands = availableCommands ?? await this.getAvailableCommands(sessionState);
+            if (commands.length === 0 || !shouldPublish()) {
+                return;
+            }
+
+            const signature = JSON.stringify(commands);
+            if (onlyChanges && this.lastPublishedCommands.get(sessionState) === signature) return;
+            this.lastPublishedCommands.set(sessionState, signature);
+            const session = new ACPSessionConnection(this.connection, sessionState.sessionId);
+            await session.update({
+                sessionUpdate: "available_commands_update",
+                availableCommands: commands
+            });
+        } catch (err) {
+            if (shouldPublish()) {
+                logger.error(`Failed to publish available commands for session ${sessionState.sessionId}`, err);
+            }
+        }
+    }
+
+    async getAvailableCommands(sessionState: SessionState): Promise<AvailableCommand[]> {
+        let skillsEntries: SkillsListEntry[] = [];
+        try {
+            const skillsResponse = await this.runWithProcessCheck(() => this.codexAcpClient.listSkills(this.createSkillsListParams(sessionState)));
+            skillsEntries = skillsResponse?.data ?? [];
+        } catch (err) {
+            logger.error(`Failed to resolve available commands for session ${sessionState.sessionId}`, err);
+        }
+        const commands = this.buildAvailableCommands(skillsEntries, sessionState.clientCapabilities.airClient);
+        if (sessionState.clientCapabilities.airClient) {
+            for (const command of commands) {
+                const action = command._meta?.["commandAction"];
+                if (action) command._meta = withAirMeta(command._meta, AIR_COMMAND_ACTION_KEY, action);
+            }
+        }
+        return commands;
+    }
+
+    private createSkillsListParams(sessionState: SessionState): SkillsListParams {
+        return {
+            cwds: [sessionState.cwd, ...sessionState.additionalDirectories],
+        };
+    }
+
+    private buildAvailableCommands(skillsEntries: SkillsListEntry[], airClient: boolean): AvailableCommand[] {
+        const commands = new Map<string, AvailableCommand>();
+
+        for (const builtin of this.getBuiltinCommands()) {
+            commands.set(builtin.name, builtin);
+        }
+
+        for (const entry of skillsEntries) {
+            for (const skill of entry.skills) {
+                const name = `$${skill.name}`;
+                if (commands.has(name)) continue;
+                const description = skill.shortDescription ?? skill.description ?? skill.name;
+                // Only AIR gets the SKILL.md path, in `_meta.jetbrains.air.skillPath`. A click on the skill chip opens it.
+                const meta = airOnlyMeta(airClient, AIR_SKILL_PATH_KEY, skill.path);
+                commands.set(name, {
+                    name,
+                    description,
+                    input: null,
+                    ...(meta ? {_meta: meta} : {}),
+                });
+            }
+        }
+
+        return Array.from(commands.values());
+    }
+
+    /**
+     * See the original cli commands documentation here: https://developers.openai.com/codex/cli/slash-commands/
+     */
+    private getBuiltinCommands(): AvailableCommand[] {
+        return [
+            {
+                name: "plan",
+                description: "Turn plan mode on and optionally send a prompt.",
+                input: {hint: "prompt (optional)"},
+                _meta: {
+                    commandAction: {
+                        kind: "setConfigOption",
+                        configId: LODY_PLAN_MODE_CONFIG_ID,
+                        value: true,
+                        resetValue: false,
+                        presentation: "state",
+                    },
+                },
+            },
+            {
+                name: "mcp",
+                description: "Show the status of the MCP servers, or reconnect them.",
+                input: { hint: MCP_COMMAND_INPUT_HINT }
+            },
+            {
+                name: "skills",
+                description: "List available skills.",
+                input: null
+            },
+            {
+                name: "status",
+                description: "Display session configuration and token usage.",
+                input: null
+            },
+            {
+                name: "review",
+                description: "Review uncommitted changes, or review with custom instructions.",
+                input: { hint: "optional review instructions" }
+            },
+            {
+                name: "review-branch",
+                description: "Review changes relative to a base branch.",
+                input: { hint: "branch name" }
+            },
+            {
+                name: "review-commit",
+                description: "Review a specific commit.",
+                input: { hint: "commit sha" }
+            },
+            {
+                name: "compact",
+                description: "Summarize conversation to avoid hitting the context limit.",
+                input: null
+            },
+            {
+                name: "goal",
+                description: "Set a goal to keep pursuing.",
+                input: { hint: "[<objective>|clear|pause|resume]" },
+                _meta: {
+                    commandAction: {
+                        kind: "prefixPrompt",
+                        presentation: "state",
+                    },
+                },
+            },
+            {
+                name: "rename",
+                description: "Rename the current session.",
+                input: { hint: "new name" }
+            },
+            {
+                name: "logout",
+                description: "Sign out of Codex. This option is available when you are logged in via ChatGPT.",
+                input: null
+            }
+        ];
+    }
+
+    private parseCommand(prompt: acp.ContentBlock[]): ParsedSlashCommand | null {
+        const firstBlock = prompt[0];
+        if (!firstBlock || firstBlock.type != "text") return null;
+
+        const text = firstBlock.text.trim();
+        if (!text.startsWith("/")) return null;
+
+        const commandText = text.slice(1).trim();
+        if (commandText.length === 0) return null;
+
+        const [name] = commandText.split(/\s+/);
+        if (!name) return null;
+
+        return {
+            name: name.toLowerCase(),
+            rest: commandText.slice(name.length).trim(),
+        };
+    }
+
+    /** Remove only the command prefix; preserve text metadata and all following blocks. */
+    private planPrompt(prompt: acp.ContentBlock[]): acp.ContentBlock[] | null {
+        const first = prompt[0];
+        if (!first || first.type !== "text") return null;
+        const text = first.text.replace(/^\s*\/\s*plan(?:\s+|$)/i, "");
+        const body = [...(text.trim() ? [{...first, text}] : []), ...prompt.slice(1)];
+        return body.some(block => block.type !== "text" || block.text.trim().length > 0) ? body : null;
+    }
+
+    async tryHandleCommand(
+        prompt: acp.ContentBlock[],
+        sessionState: SessionState,
+        options: CommandHandleOptions = {},
+    ): Promise<CommandHandleResult> {
+        const command = this.parseCommand(prompt);
+        if (command === null) return { handled: false };
+        const commandName = command.name;
+        if (commandName.startsWith("$")) return { handled: false };
+
+        const sessionId = sessionState.sessionId;
+        switch (commandName) {
+            case "plan": {
+                if (!options.setConfigOption) return {handled: false};
+                const planPrompt = this.planPrompt(prompt);
+                // A request always enables planning, even when already in plan mode.
+                // Only the standalone command retains the existing toggle behavior.
+                const mode = planPrompt !== null || sessionState.collaborationMode !== PLAN_COLLABORATION_MODE;
+                await options.setConfigOption(LODY_PLAN_MODE_CONFIG_ID, mode);
+                return planPrompt === null ? {handled: true} : {handled: false, prompt: planPrompt};
+            }
+            case "compact": {
+                options.onTurnStartPending?.();
+                options.onNativeCommandStarted?.();
+                try {
+                    const turnCompleted = await this.runWithProcessCheck(() =>
+                        this.codexAcpClient.runCompact(sessionId, (turnId) => {
+                            options.onTurnStarted?.(turnId, sessionId);
+                        }, options.onCommandAccepted),
+                    );
+                    return { handled: true, turnCompleted };
+                } finally {
+                    options.onNativeCommandFinished?.();
+                }
+            }
+            case "goal": {
+                return await this.runGoalCommand(sessionState, command.rest, options);
+            }
+            case "review": {
+                const target = this.buildReviewTarget(command.rest);
+                const turnCompleted = await this.runReviewCommand(sessionState, target, options);
+                return { handled: true, turnCompleted, waitForGoalContinuation: false };
+            }
+            case "review-branch": {
+                if (command.rest.length === 0) {
+                    await this.sendCommandUsageMessage(commandName, "branch name", sessionId);
+                    return { handled: true };
+                }
+                const turnCompleted = await this.runReviewCommand(sessionState, {
+                    type: "baseBranch",
+                    branch: command.rest,
+                }, options);
+                return { handled: true, turnCompleted, waitForGoalContinuation: false };
+            }
+            case "review-commit": {
+                if (command.rest.length === 0) {
+                    await this.sendCommandUsageMessage(commandName, "commit sha", sessionId);
+                    return { handled: true };
+                }
+                const turnCompleted = await this.runReviewCommand(sessionState, {
+                    type: "commit",
+                    sha: command.rest,
+                    title: null,
+                }, options);
+                return { handled: true, turnCompleted, waitForGoalContinuation: false };
+            }
+            case "status": {
+                await this.refreshRateLimits(sessionState);
+                const message = this.buildStatusMessage(sessionState);
+                await this.sendCommandMessage(message, sessionId);
+                return { handled: true };
+            }
+            case "rename": {
+                if (command.rest.length === 0) {
+                    await this.sendCommandUsageMessage(commandName, "new name", sessionId);
+                    return { handled: true };
+                }
+                // The new name replaces a `_session/rename` title, so its echo must be shown.
+                delete sessionState.sessionIndexExplicitTitle;
+                await this.runWithProcessCheck(() => this.codexAcpClient.renameSession(sessionId, command.rest));
+                return { handled: true };
+            }
+            case "logout": {
+                await this.runWithProcessCheck(() => this.codexAcpClient.logout());
+                await this.onLogout();
+                await this.sendCommandMessage("Logged out from Codex account.", sessionId);
+                return { handled: true };
+            }
+            case "skills": {
+                const response = await this.runWithProcessCheck(() => this.codexAcpClient.listSkills(this.createSkillsListParams(sessionState)));
+                const skills = (response?.data ?? []).flatMap(entry => entry.skills);
+                const lines = skills.map(skill => {
+                    const description = skill.shortDescription ?? skill.description ?? "";
+                    return description ? `- ${skill.name}: ${description}` : `- ${skill.name}`;
+                });
+                const text = lines.length > 0
+                    ? ["Available skills:", ...lines].join("\n")
+                    : "No skills configured.";
+                await this.sendCommandMessage(text, sessionId);
+                return { handled: true };
+            }
+            case "mcp": {
+                const text = await this.mcpCommand.run(command.rest, sessionState, options.signal);
+                if (text === null) {
+                    return { handled: true };
+                }
+                const session = new ACPSessionConnection(this.connection, sessionId);
+                await session.update(createAgentTextMessageChunk(text));
+                return { handled: true };
+            }
+            default:
+                // Let Codex resolve unrecognized commands as raw prompts.
+                return { handled: false };
+        }
+    }
+
+    private async runReviewCommand(
+        sessionState: SessionState,
+        target: ReviewTarget,
+        options: CommandHandleOptions,
+    ): Promise<TurnCompletedNotification> {
+        options.onTurnStartPending?.();
+        options.onNativeCommandStarted?.();
+        try {
+            return await this.runWithProcessCheck(() => this.codexAcpClient.runReview(
+                sessionState.sessionId,
+                target,
+                (turnId, threadId) => {
+                    const reviewTurnId = sessionState.currentTurnId;
+                    this.handleCommandTurnStarted(sessionState, options, turnId, threadId);
+                    sessionState.interruptTurnId = turnId;
+                    sessionState.currentTurnId = reviewTurnId ?? turnId;
+                },
+                options.onCommandAccepted,
+                turnId => {sessionState.currentTurnId = turnId;},
+            ));
+        } finally {
+            options.onNativeCommandFinished?.();
+        }
+    }
+
+    private async runGoalCommand(
+        sessionState: SessionState,
+        rest: string,
+        options: CommandHandleOptions,
+    ): Promise<CommandHandleResult> {
+        const sessionId = sessionState.sessionId;
+        const argument = rest.trim();
+        if (argument.length === 0) {
+            await this.sendCommandUsageMessage("goal", "[<objective>|clear|pause|resume]", sessionId);
+            return { handled: true };
+        }
+
+        const named = argument.toLowerCase();
+        if (named === "pause" || named === "resume" || named === "clear") {
+            return await this.runGoalPromptControl(
+                sessionState,
+                {version: GOAL_EXTENSION_VERSION, action: named},
+                options,
+            );
+        }
+
+        if (argument.length > GOAL_OBJECTIVE_MAX_LENGTH) {
+            const session = new ACPSessionConnection(this.connection, sessionId);
+            await session.update(createAgentTextMessageChunk(
+                `Command "/goal" requires goal text of at most ${GOAL_OBJECTIVE_MAX_LENGTH} characters.`,
+            ));
+            return { handled: true };
+        }
+
+        return await this.runGoalPromptControl(
+            sessionState,
+            {version: GOAL_EXTENSION_VERSION, action: "set", objective: argument},
+            options,
+        );
+    }
+
+    /**
+     * Run a goal action inside whatever prompt is already executing. `/goal …`
+     * and a prompt carrying `_meta.lody.goalControl` are the same operation
+     * reaching the same place: the caller's prompt owns any turn the action
+     * starts, so neither has to start one behind the client's back.
+     */
+    async runGoalPromptControl(
+        sessionState: SessionState,
+        control: GoalPromptControl,
+        options: CommandHandleOptions = {},
+    ): Promise<CommandHandleResult> {
+        const sessionId = sessionState.sessionId;
+        if (control.action === "pause") {
+            await this.runWithProcessCheck(() => this.codexAcpClient.setGoalStatus(sessionId, "paused"));
+            return { handled: true };
+        }
+        if (control.action === "clear") {
+            await this.runWithProcessCheck(() => this.codexAcpClient.clearGoal(sessionId));
+            return { handled: true };
+        }
+        if (control.action === "set" && control.objective.trim().length > GOAL_OBJECTIVE_MAX_LENGTH) {
+            throw RequestError.invalidParams(
+                undefined,
+                `A goal objective may be at most ${GOAL_OBJECTIVE_MAX_LENGTH} characters`,
+            );
+        }
+        options.onTurnStartPending?.();
+        const onTurnStarted = (turnId: string) => {
+            this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
+        };
+        return this.createGoalCommandResult(sessionState.sessionId, await this.runWithProcessCheck(() =>
+            control.action === "set"
+                ? this.codexAcpClient.setGoal(sessionId, control.objective.trim(), onTurnStarted, undefined, options.onCommandAccepted)
+                : this.codexAcpClient.resumeGoal(sessionId, onTurnStarted, undefined, options.onCommandAccepted),
+        ));
+
+    }
+
+    private handleCommandTurnStarted(
+        sessionState: SessionState,
+        options: CommandHandleOptions,
+        turnId: string,
+        threadId: string,
+    ): void {
+        if (options.onTurnStarted) {
+            options.onTurnStarted(turnId, threadId);
+        } else {
+            sessionState.currentTurnId = turnId;
+        }
+    }
+
+    private createGoalCommandResult(sessionId: string, turnCompleted: TurnCompletedNotification | null): CommandHandleResult {
+        return resolveGoalCommandHandleResult(turnCompleted);
+    }
+
+    private buildReviewTarget(instructions: string): ReviewTarget {
+        if (instructions.length === 0) {
+            return { type: "uncommittedChanges" };
+        }
+        return {
+            type: "custom",
+            instructions,
+        };
+    }
+
+    private async sendCommandUsageMessage(name: string, inputHint: string, sessionId: string): Promise<void> {
+        await this.sendCommandMessage(`Command "/${name}" requires ${inputHint}.`, sessionId);
+    }
+
+    private async sendCommandMessage(text: string, sessionId: string): Promise<void> {
+        const session = new ACPSessionConnection(this.connection, sessionId);
+        await session.update(createAgentTextMessageChunk(text));
+    }
+
+    private buildStatusMessage(sessionState: SessionState): string {
+        const agentMode = sessionState.agentMode;
+        const accountText = this.formatAccountInfo(sessionState.account);
+        const tokenUsageText = this.formatTokenUsage(sessionState.totalTokenUsage);
+        const contextWindowText = this.formatContextWindow(
+            sessionState.lastTokenUsage,
+            sessionState.modelContextWindow
+        );
+
+        const lines = [
+            `**Model:** ${sessionState.currentModelId}`,
+            `**Directory:** ${sessionState.cwd}`,
+            `**Approval:** ${agentMode.approvalPolicy}`,
+            `**Sandbox:** ${agentMode.sandboxMode}`,
+            `**Account:** ${accountText}`,
+            `**Session:** \`${sessionState.sessionId}\``,
+            ``,
+            `**Token usage:** ${tokenUsageText}`,
+            `**Context window:** ${contextWindowText}`,
+            ...this.formatRateLimitLines(sessionState.rateLimits),
+        ];
+
+        return lines.join("  \n");
+    }
+
+    private async refreshRateLimits(sessionState: SessionState): Promise<void> {
+        try {
+            const response = await this.runWithProcessCheck(() => this.codexAcpClient.getRateLimits());
+            if (response) {
+                sessionState.rateLimits = createRateLimitsMap(response);
+            }
+        } catch (err) {
+            logger.error(`Failed to refresh rate limits for session ${sessionState.sessionId}`, err);
+        }
+    }
+
+    private formatAccountInfo(account: SessionState["account"]): string {
+        if (!account) {
+            return "not logged in";
+        }
+        if (account.type === "apiKey") {
+            return "API key configured";
+        }
+        if (account.type === "chatgpt") {
+            return `ChatGPT ${account.planType} (${account.email})`;
+        }
+        if (account.type === "amazonBedrock") {
+            return "Amazon Bedrock";
+        }
+        return "unknown";
+    }
+
+    private formatTokenUsage(usage: TokenCount | null): string {
+        if (!usage) {
+            return "data not available yet";
+        }
+        const total = this.formatTokenCount(usage.totalTokens);
+        const input = this.formatTokenCount(usage.inputTokens);
+        const cachedInput = this.formatTokenCount(usage.cachedInputTokens);
+        const output = this.formatTokenCount(usage.outputTokens);
+        const cacheWrite = usage.cacheWriteInputTokens > 0
+            ? ` + ${this.formatTokenCount(usage.cacheWriteInputTokens)} cache write`
+            : "";
+        return `${total} total  (${input} input + ${cachedInput} cached input${cacheWrite}, ${output} output)`;
+    }
+
+    private formatContextWindow(usage: TokenCount | null, contextWindow: number | null): string {
+        if (!usage || !contextWindow) {
+            return "data not available yet";
+        }
+        const used = usage.totalTokens;
+        const percentUsed = Math.round((used / contextWindow) * 100);
+        const usedFormatted = this.formatTokenCount(used);
+        const totalFormatted = this.formatTokenCount(contextWindow);
+        return `${percentUsed}% used (${usedFormatted} used / ${totalFormatted})`;
+    }
+
+    private formatRateLimitLines(rateLimits: RateLimitsMap | null): string[] {
+        if (!rateLimits || rateLimits.size === 0) {
+            return [`**Limits:** data not available yet`];
+        }
+
+        const lines: string[] = [];
+
+        for (const [, entry] of rateLimits) {
+            lines.push(...this.formatSingleRateLimit(entry.limitName, entry.snapshot));
+        }
+
+        return lines.length > 0 ? lines : [`**Limits:** data not available yet`];
+    }
+
+    private formatSingleRateLimit(limitName: string, rateLimits: RateLimitSnapshot): string[] {
+        const lines: string[] = [];
+        const prefix = limitName ? `${limitName} ` : "";
+
+        if (rateLimits.primary) {
+            const percentLeft = Math.round(100 - rateLimits.primary.usedPercent);
+            const resetText = this.formatResetTime(rateLimits.primary.resetsAt);
+            const label = this.formatWindowLabel(rateLimits.primary.windowDurationMins);
+            lines.push(`**${prefix}${label}:** ${percentLeft}% left${resetText}`);
+        }
+
+        if (rateLimits.secondary) {
+            const percentLeft = Math.round(100 - rateLimits.secondary.usedPercent);
+            const resetText = this.formatResetTime(rateLimits.secondary.resetsAt);
+            const label = this.formatWindowLabel(rateLimits.secondary.windowDurationMins);
+            lines.push(`**${prefix}${label}:** ${percentLeft}% left${resetText}`);
+        }
+
+        if (rateLimits.credits) {
+            if (rateLimits.credits.unlimited) {
+                lines.push(`**${prefix}Credits:** unlimited`);
+            } else if (rateLimits.credits.balance) {
+                lines.push(`**${prefix}Credits:** ${rateLimits.credits.balance}`);
+            }
+        }
+
+        if (rateLimits.individualLimit) {
+            const limit = rateLimits.individualLimit;
+            const used = this.formatCreditAmount(limit.used);
+            const total = this.formatCreditAmount(limit.limit);
+            if (used !== null && total !== null) {
+                const percentLeft = Math.round(Math.min(100, Math.max(0, limit.remainingPercent)));
+                const resetDate = new Date(limit.resetsAt * 1000)
+                    .toLocaleDateString("en-US", {month: "short", day: "numeric"});
+                lines.push(
+                    `**${prefix}individual spend limit:** ${percentLeft}% left (${used} of ${total} credits used; resets ${resetDate})`,
+                );
+            }
+        }
+
+        return lines;
+    }
+
+    private formatCreditAmount(raw: string): string | null {
+        const trimmed = raw.trim();
+        if (trimmed.length === 0) {
+            return null;
+        }
+        const value = Number(trimmed);
+        if (!Number.isFinite(value) || value < 0) {
+            return null;
+        }
+        return Math.round(value).toLocaleString("en-US");
+    }
+
+    private formatWindowLabel(windowDurationMins: number | null): string {
+        if (windowDurationMins === null) {
+            return "Limit";
+        }
+        if (windowDurationMins < 60) {
+            return `${windowDurationMins}m limit`;
+        }
+        if (windowDurationMins < 1440) {
+            const hours = Math.round(windowDurationMins / 60);
+            return `${hours}h limit`;
+        }
+        if (windowDurationMins < 10080) {
+            const days = Math.round(windowDurationMins / 1440);
+            return `${days}d limit`;
+        }
+        return "Weekly limit";
+    }
+
+    private formatResetTime(resetsAt: number | null): string {
+        if (resetsAt === null) {
+            return "";
+        }
+        const resetDate = new Date(resetsAt * 1000);
+        const now = new Date();
+        const isToday = resetDate.toDateString() === now.toDateString();
+
+        const timeStr = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+
+        if (isToday) {
+            return ` (resets ${timeStr})`;
+        }
+
+        const dateStr = resetDate.toLocaleDateString([], { day: 'numeric', month: 'short' });
+        return ` (resets ${timeStr} on ${dateStr})`;
+    }
+
+    private formatTokenCount(count: number): string {
+        if (count >= 1000000) {
+            return `${(count / 1000000).toFixed(1)}M`;
+        }
+        if (count >= 1000) {
+            return `${(count / 1000).toFixed(1)}K`;
+        }
+        return count.toString();
+    }
+}
