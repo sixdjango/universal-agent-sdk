@@ -221,11 +221,12 @@ export async function resolveACPProcessLaunchAsync(
 
   switch (input.agentType) {
     case 'deepseek': {
-      // Ensure npx is available (or custom executablePath is valid)
-      await resolveExec();
+      // Prefer local `dsh` binary when available; fall back to `npx` only if `dsh` is not installed
+      const resolvedDshOrNpx = await resolveExec();
       const adapterPath = resolveBundledAdapterEntry('deepseek-acp');
       const launch = await resolveDeepSeekHarnessProcessLaunch({
         adapterPath,
+        executablePath: resolvedDshOrNpx,
         dataRoot: input.dataDir,
         providerId: input.providerId,
         extraArgs: input.extraArgs,

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
-import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -288,14 +288,85 @@ export function getDeepSeekHarnessProviderHome(dataRoot: string, providerId: str
   return join(dataRoot, 'deepseek-harness', 'providers', providerId);
 }
 
+const INHERITED_WEB_PATCH_IDS = new Set([
+  'llm-pi-ai',
+  'llm-deepseek',
+  'agent-default-model',
+  'web-search-deepseek',
+]);
+
+async function readWebProfileModelOverlay(legacyHome: string): Promise<{
+  patchBlocks: string;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+}> {
+  const webPatchPath = join(legacyHome, 'profiles', 'web', 'cordis.patch.yml');
+  let raw: string;
+  try {
+    raw = await readFile(webPatchPath, 'utf8');
+  } catch {
+    return { patchBlocks: '' };
+  }
+
+  const lines = raw.split(/\r?\n/);
+  const blocks: string[][] = [];
+  let current: string[] | null = null;
+
+  for (const line of lines) {
+    if (/^-\s+id:\s+/.test(line)) {
+      if (current) blocks.push(current);
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  if (current) blocks.push(current);
+
+  const keptBlocks: string[] = [];
+  let provider: string | undefined;
+  let model: string | undefined;
+  let reasoningEffort: string | undefined;
+
+  for (const block of blocks) {
+    const header = block[0] ?? '';
+    const match = header.match(/^-\s+id:\s+([^\s#]+)/);
+    const id = match?.[1]?.trim();
+    if (!id || !INHERITED_WEB_PATCH_IDS.has(id)) continue;
+    const text = block.join('\n').trimEnd();
+    keptBlocks.push(text);
+
+    if (id === 'agent-default-model') {
+      const providerMatch = text.match(/^\s+provider:\s*['"]?([^'"\r\n#]+)['"]?/m);
+      const modelMatch = text.match(/^\s+model:\s*['"]?([^'"\r\n#]+)['"]?/m);
+      const effortMatch = text.match(/^\s+reasoningEffort:\s*['"]?([^'"\r\n#]+)['"]?/m);
+      if (providerMatch?.[1]) provider = providerMatch[1].trim();
+      if (modelMatch?.[1]) model = modelMatch[1].trim();
+      if (effortMatch?.[1]) reasoningEffort = effortMatch[1].trim();
+    }
+  }
+
+  return {
+    patchBlocks: keptBlocks.length > 0 ? keptBlocks.join('\n') + '\n' : '',
+    provider,
+    model,
+    reasoningEffort,
+  };
+}
+
 export async function resolveDeepSeekHarnessProcessLaunch(options: {
   adapterPath: string;
+  executablePath?: string;
   rootDir?: string;
   providerId?: string;
   dataRoot?: string;
   extraArgs?: string[];
   env?: NodeJS.ProcessEnv;
-}) {
+}): Promise<{
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}> {
   const legacyHome = options.rootDir ?? resolveDeepSeekHarnessHome(options.env);
   const defaultDataRoot = join(homedir(), '.universal-agent');
   const rootDir = options.providerId
@@ -304,14 +375,17 @@ export async function resolveDeepSeekHarnessProcessLaunch(options: {
   const sessionsRoot = join(legacyHome, 'sessions');
   const presetRoot = join(dirname(options.adapterPath), 'deepseek-agent-presets');
   const sessionCompression = await resolveDeepSeekHarnessSessionCompression(sessionsRoot);
+  const webOverlay = await readWebProfileModelOverlay(legacyHome);
   const profileFiles = createDeepSeekHarnessProfileFiles({
     adapterPath: options.adapterPath,
     presetRoot,
     sessionCompression,
-    reasoningEffort: 'max',
+    provider: webOverlay.provider,
+    model: webOverlay.model,
+    reasoningEffort: webOverlay.reasoningEffort ?? 'max',
   });
   await mkdir(sessionsRoot, { recursive: true });
-  const guardPatch = `- id: session-telemetry-otel
+  const guardPatch = `${webOverlay.patchBlocks}- id: session-telemetry-otel
   disabled: true
 - id: plugin-package-inventory-deepseek
   disabled: true
@@ -365,6 +439,28 @@ export async function resolveDeepSeekHarnessProcessLaunch(options: {
       }
     ),
   ]);
+
+  const isNpxFallback =
+    !options.executablePath ||
+    /(^|[/\\])npx(?:\.(?:cmd|exe|bat|ps1))?$/i.test(options.executablePath);
+
+  if (!isNpxFallback && options.executablePath) {
+    return {
+      command: options.executablePath,
+      args: [
+        '--profile',
+        profileName,
+        '--patch',
+        join(bundleDir, 'host.patch.yml'),
+        ...(options.extraArgs ?? []),
+      ],
+      env: {
+        [DEEPSEEK_HARNESS_HOME_ENV]: rootDir,
+        [ACP_EXTENSION_DSH_SESSION_ROOT_ENV]: sessionsRoot,
+        [ACP_EXTENSION_DSH_QUERY_PATH_ENV]: join(sessionsRoot, 'session-query.db'),
+      },
+    };
+  }
 
   const dshNodeArgs = [
     '--input-type=module',

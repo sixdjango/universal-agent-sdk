@@ -118,14 +118,24 @@ describe('launcher & 7 built-in agent resolution', () => {
     expect(piLaunch.env?.UA_PI_PATH).toBe(binaries.pi);
     expect(piLaunch.env?.LODY_PI_PATH).toBe(binaries.pi);
 
-    // 5. DeepSeek Harness
-    const dshLaunch = await resolveACPProcessLaunchAsync({
+    // 5. DeepSeek Harness (falls back to npx when dsh binary is not installed, or uses local dsh binary directly when present)
+    const dshNpxFallbackLaunch = await resolveACPProcessLaunchAsync({
       ...baseInput,
       agentType: 'deepseek',
       providerId: 'test-provider',
     });
-    expect(dshLaunch.command).toBe('npx');
-    expect(dshLaunch.env?.DSH_HOME).toContain('test-provider');
+    expect(dshNpxFallbackLaunch.command).toBe('npx');
+    expect(dshNpxFallbackLaunch.env?.DSH_HOME).toContain('test-provider');
+
+    binaries.dsh = createDummyBinary(binDir, 'dsh');
+    const dshLocalLaunch = await resolveACPProcessLaunchAsync({
+      ...baseInput,
+      agentType: 'deepseek',
+      providerId: 'test-provider',
+    });
+    expect(dshLocalLaunch.command).toBe(binaries.dsh);
+    expect(dshLocalLaunch.args[0]).toBe('--profile');
+    expect(dshLocalLaunch.env?.DSH_HOME).toContain('test-provider');
 
     // 6. Grok
     const grokLaunch = await resolveACPProcessLaunchAsync({

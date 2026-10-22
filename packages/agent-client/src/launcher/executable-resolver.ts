@@ -33,7 +33,7 @@ export const AGENT_BINARY_CANDIDATES: Record<BuiltinAgentType, readonly string[]
   codex: ['codex'],
   kimi: ['kimi', 'kimi-code'],
   pi: ['pi'],
-  deepseek: ['npx'],
+  deepseek: ['dsh', 'npx'],
   grok: ['grok'],
   devin: ['devin'],
 };
