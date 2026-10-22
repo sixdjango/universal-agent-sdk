@@ -1,7 +1,7 @@
 {
   "protocolVersion": 1,
   "agentInfo": {
-    "name": "acp-extension-codex",
+    "name": "@universal-agent/acp-extension-codex",
     "title": "Codex",
     "version": "<version>"
   },
