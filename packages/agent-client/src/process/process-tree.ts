@@ -211,8 +211,7 @@ const hasPid = (child: ChildProcess): child is ChildProcess & { pid: number } =>
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => {
-    const t = setTimeout(resolve, ms);
-    t.unref?.();
+    setTimeout(resolve, ms);
   });
 
 const signalFailed = (target: string, signal: NodeJS.Signals | 0, cause: unknown) =>

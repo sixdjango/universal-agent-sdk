@@ -4,11 +4,20 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  formatCustomAcpCommandLine,
+  parseCustomAcpCommandLine,
+} from '../src/launcher/custom-acp-command';
+import {
   BUILTIN_AGENT_TYPES,
   detectAgentExecutable,
   listDetectableAgents,
   resolveAgentExecutable,
 } from '../src/launcher/executable-resolver';
+import {
+  getRegistryAgent,
+  isRegistryAgentType,
+  listRegistryAgents,
+} from '../src/launcher/registry';
 import {
   resolveACPProcessLaunchAsync,
   resolveBundledAdapterEntry,
@@ -64,7 +73,7 @@ describe('launcher & 7 built-in agent resolution', () => {
     tempDirs.push(binDir, dataDir);
 
     const binaries: Record<string, string> = {};
-    for (const name of ['claude', 'codex', 'kimi', 'pi', 'npx', 'grok', 'devin']) {
+    for (const name of ['claude', 'codex', 'kimi', 'pi', 'npx', 'grok', 'devin', 'bub', 'dimcode']) {
       binaries[name] = createDummyBinary(binDir, name);
     }
 
@@ -156,7 +165,23 @@ describe('launcher & 7 built-in agent resolution', () => {
     expect(devinLaunch.args[0]).toBe(resolveBundledAdapterEntry('devin-acp'));
     expect(devinLaunch.env?.DEVIN_PATH).toBe(binaries.devin);
 
-    // 8. Custom
+    // 8. Bub & Dimcode (native ACP builtins)
+    const bubLaunch = await resolveACPProcessLaunchAsync({
+      ...baseInput,
+      agentType: 'bub',
+    });
+    expect(bubLaunch.command).toBe(binaries.bub);
+    expect(bubLaunch.args).toEqual(['acp']);
+
+    const dimcodeLaunch = await resolveACPProcessLaunchAsync({
+      ...baseInput,
+      agentType: 'dimcode',
+    });
+    expect(dimcodeLaunch.command).toBe(binaries.dimcode);
+    expect(dimcodeLaunch.args).toEqual(['acp']);
+    expect(dimcodeLaunch.env?.DIMCODE_DISABLE_AUTOUPDATE).toBe('1');
+
+    // 9. Custom
     const customLaunch = await resolveACPProcessLaunchAsync({
       ...baseInput,
       agentType: 'custom',
@@ -169,6 +194,72 @@ describe('launcher & 7 built-in agent resolution', () => {
     expect(customLaunch.command).toBe('opencode');
     expect(customLaunch.args).toEqual(['acp']);
     expect(customLaunch.env?.OPENCODE_MODE).toBe('test');
+  });
+
+  it('resolves all 37+ ACP Registry agents (antigravity-acp, gemini, cursor, opencode, qwen-code, etc.) with local-first priority', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'ua-reg-bins-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'ua-reg-data-'));
+    tempDirs.push(binDir, dataDir);
+
+    expect(listRegistryAgents().length).toBeGreaterThanOrEqual(37);
+    expect(isRegistryAgentType('antigravity-acp')).toBe(true);
+    expect(isRegistryAgentType('antigravity')).toBe(true);
+    expect(isRegistryAgentType('agy')).toBe(true);
+    expect(getRegistryAgent('antigravity')?.id).toBe('antigravity-acp');
+
+    const baseInput = {
+      env: { PATH: binDir, PATHEXT: '.COM;.EXE;.BAT;.CMD' },
+      loginShellEnv: null,
+      probeLoginShell: false,
+      homeDir: dataDir,
+      dataDir,
+    };
+
+    // Gemini falls back to npx when not locally installed
+    const geminiNpx = await resolveACPProcessLaunchAsync({
+      ...baseInput,
+      agentType: 'gemini',
+    });
+    expect(geminiNpx.command).toBe('npx');
+    expect(geminiNpx.args).toContain('@google/gemini-cli@0.64.0');
+    expect(geminiNpx.args).toContain('--acp');
+
+    // When gemini is installed locally in PATH, it prefers the local binary over npx
+    const localGeminiBin = createDummyBinary(binDir, 'gemini');
+    const geminiLocal = await resolveACPProcessLaunchAsync({
+      ...baseInput,
+      agentType: 'gemini',
+    });
+    expect(geminiLocal.command).toBe(localGeminiBin);
+    expect(geminiLocal.args).toEqual(['--acp']);
+
+    // Antigravity (via alias 'antigravity' or 'antigravity-acp') uses local agy_acp_server.par when present
+    const localAgyServer = createDummyBinary(binDir, 'agy_acp_server.par');
+    const agyLaunch = await resolveACPProcessLaunchAsync({
+      ...baseInput,
+      agentType: 'antigravity',
+    });
+    expect(agyLaunch.command).toBe(localAgyServer);
+    expect(agyLaunch.capabilitySourceVersion).toBe('antigravity-acp@1.4.1');
+
+    // OpenCode & Cursor local registry agents
+    const localOpencode = createDummyBinary(binDir, 'opencode');
+    const opencodeLaunch = await resolveACPProcessLaunchAsync({
+      ...baseInput,
+      agentType: 'opencode',
+    });
+    expect(opencodeLaunch.command).toBe(localOpencode);
+    expect(opencodeLaunch.args).toEqual(['acp']);
+
+    // Custom command line tokenizer round-trip
+    const parsed = parseCustomAcpCommandLine('"/path/with spaces/my-agent" --acp --flag="hello world"');
+    expect(parsed).toEqual({
+      command: '/path/with spaces/my-agent',
+      args: ['--acp', '--flag=hello world'],
+    });
+    expect(formatCustomAcpCommandLine(parsed!)).toBe(
+      '"/path/with spaces/my-agent" --acp "--flag=hello world"'
+    );
   });
 
   it('detects found and not-found agents via listDetectableAgents and prioritizes executablePath override', async () => {

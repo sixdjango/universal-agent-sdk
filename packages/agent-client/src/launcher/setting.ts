@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { delimiter, dirname, join, normalize, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getAcpBinaryManager, mapPlatformArch } from './acp-binary-manager';
 import {
   DEEPSEEK_HARNESS_BASE_URL_ENV,
   DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION,
@@ -11,10 +13,21 @@ import {
 import {
   type BuiltinAgentType,
   DEFAULT_ACP_RELATIVE_DIRS,
+  detectCommandExecutable,
   expandHomePath,
   isBuiltinAgentType,
   resolveAgentExecutable,
 } from './executable-resolver';
+import {
+  getRegistryAcpLaunchKind,
+  getRegistryAgent,
+  isRegistryAgentType,
+  normalizeRegistryAgentId,
+  REGISTRY_NPX_LOCAL_BINARY_CANDIDATES,
+  type RegistryAcpAgent,
+  type RegistryAgentId,
+  resolveRegistryNpxPackage,
+} from './registry';
 
 export type BundledAdapterName =
   | 'claude-acp'
@@ -32,7 +45,8 @@ export interface CustomAcpLaunchSpec {
 }
 
 export interface ResolveACPProcessLaunchInput {
-  agentType: BuiltinAgentType | 'custom';
+  cliType?: 'builtin' | 'registry' | 'custom';
+  agentType: BuiltinAgentType | RegistryAgentId | 'custom' | string;
   executablePath?: string;
   customCommand?: CustomAcpLaunchSpec;
   piExtensions?: string[];
@@ -44,6 +58,7 @@ export interface ResolveACPProcessLaunchInput {
   probeLoginShell?: boolean;
   homeDir?: string;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
 }
 
 export interface ResolvedACPProcessLaunch {
@@ -157,14 +172,17 @@ export const CODEX_DEFAULT_ADAPTER_ARGS = [
   'features.goals=true',
 ] as const;
 
+const NPX_CACHE_MODE_ARG = '--prefer-offline';
+
 export function getAcpCapabilitySourceVersion(input: {
-  agentType: BuiltinAgentType | 'custom';
+  cliType?: 'builtin' | 'registry' | 'custom';
+  agentType: BuiltinAgentType | RegistryAgentId | 'custom' | string;
   executablePath?: string;
   customCommand?: CustomAcpLaunchSpec;
   piExtensions?: string[];
   env?: NodeJS.ProcessEnv;
 }): string {
-  if (input.agentType === 'custom') {
+  if (input.cliType === 'custom' || input.agentType === 'custom') {
     if (!input.customCommand) {
       return 'custom:unknown';
     }
@@ -173,6 +191,18 @@ export function getAcpCapabilitySourceVersion(input: {
   const overrideSuffix = input.executablePath?.trim()
     ? `+override:${input.executablePath.trim()}`
     : '';
+  const isRegistry =
+    input.cliType === 'registry' ||
+    (input.cliType !== 'builtin' &&
+      !isBuiltinAgentType(input.agentType) &&
+      isRegistryAgentType(input.agentType));
+  if (isRegistry) {
+    const agent = getRegistryAgent(input.agentType);
+    if (!agent) {
+      return `registry:${input.agentType}:unknown${overrideSuffix}`;
+    }
+    return `${agent.id}@${agent.version}${overrideSuffix}`;
+  }
   if (input.agentType === 'deepseek') {
     const baseUrl = input.env?.[DEEPSEEK_HARNESS_BASE_URL_ENV]?.trim();
     const endpointSuffix = baseUrl
@@ -183,7 +213,182 @@ export function getAcpCapabilitySourceVersion(input: {
   if (input.agentType === 'pi' && input.piExtensions?.length) {
     return `builtin-pi+extensions:${input.piExtensions.join(',')}${overrideSuffix}`;
   }
+  if (input.agentType === 'bub') {
+    return `builtin-bub:acp${overrideSuffix}`;
+  }
+  if (input.agentType === 'dimcode') {
+    return `builtin-dimcode:local-acp${overrideSuffix}`;
+  }
   return `builtin-${input.agentType}${overrideSuffix}`;
+}
+
+async function ensureAntigravityAcpSettings(
+  env: NodeJS.ProcessEnv | undefined,
+  homeDir: string = homedir()
+): Promise<void> {
+  const effectiveEnv = env ?? process.env;
+  const geminiHome = effectiveEnv.GEMINI_HOME?.trim() || join(homeDir, '.gemini');
+  const settingsDir = join(geminiHome, 'antigravity-acp');
+  const settingsPath = join(settingsDir, 'settings.json');
+  if (existsSync(settingsPath)) {
+    return;
+  }
+  const authType = effectiveEnv.GEMINI_API_KEY?.trim()
+    ? 'gemini-api-key'
+    : effectiveEnv.AGY_LLM_GATEWAY_URL?.trim()
+      ? 'gateway'
+      : effectiveEnv.GOOGLE_API_KEY?.trim() || effectiveEnv.GOOGLE_CLOUD_PROJECT?.trim()
+        ? 'agent-platform'
+        : 'oauth-personal';
+  try {
+    await mkdir(settingsDir, { recursive: true });
+    await writeFile(
+      settingsPath,
+      `${JSON.stringify({ auth: { type: authType } }, null, 2)}\n`,
+      { flag: 'wx' }
+    );
+  } catch {
+    // Ignore if created concurrently or read-only home
+  }
+}
+
+async function resolveRegistryAgentProcessLaunch(
+  agent: RegistryAcpAgent,
+  input: ResolveACPProcessLaunchInput,
+  capabilitySourceVersion: string
+): Promise<ResolvedACPProcessLaunch> {
+  if (agent.id === 'antigravity-acp') {
+    await ensureAntigravityAcpSettings(input.env, input.homeDir);
+  }
+  const execDetectOptions = {
+    executablePath: input.executablePath,
+    env: input.env,
+    loginShellEnv: input.loginShellEnv,
+    probeLoginShell: input.probeLoginShell,
+    homeDir: input.homeDir,
+    platform: input.platform,
+  };
+
+  if (agent.distribution.local?.command) {
+    const localDist = agent.distribution.local;
+    const detected = await detectCommandExecutable([localDist.command], execDetectOptions);
+    const command =
+      detected.found && detected.resolvedPath ? detected.resolvedPath : localDist.command;
+    return {
+      command,
+      args: [...(localDist.args ?? []), ...(input.extraArgs ?? [])],
+      ...(localDist.env ? { env: { ...localDist.env } } : {}),
+      capabilitySourceVersion,
+    };
+  }
+
+  if (agent.distribution.npx?.package) {
+    const npxDist = agent.distribution.npx;
+    // Prefer local binary when installed on the machine (or explicitly overridden via executablePath)
+    const localCandidates = REGISTRY_NPX_LOCAL_BINARY_CANDIDATES[agent.id];
+    if (input.executablePath?.trim() || (localCandidates && localCandidates.length > 0)) {
+      const detected = await detectCommandExecutable(
+        localCandidates ?? [agent.id],
+        execDetectOptions
+      );
+      if (detected.found && detected.resolvedPath) {
+        return {
+          command: detected.resolvedPath,
+          args: [...(npxDist.args ?? []), ...(input.extraArgs ?? [])],
+          ...(npxDist.env ? { env: { ...npxDist.env } } : {}),
+          capabilitySourceVersion,
+        };
+      }
+      if (input.executablePath?.trim()) {
+        throw new Error(
+          `Configured executablePath for registry agent "${agent.id}" does not exist or is not executable: ${input.executablePath.trim()}`
+        );
+      }
+    }
+
+    const packageSpec = resolveRegistryNpxPackage(npxDist, input.platform);
+    const args = [
+      ...(npxDist.registry ? [`--registry=${npxDist.registry}`] : []),
+      NPX_CACHE_MODE_ARG,
+      '-y',
+      packageSpec,
+      ...(npxDist.args ?? []),
+      ...(input.extraArgs ?? []),
+    ];
+    return {
+      command: 'npx',
+      args,
+      ...(npxDist.env ? { env: { ...npxDist.env } } : {}),
+      capabilitySourceVersion,
+    };
+  }
+
+  if (agent.distribution.uvx?.package) {
+    const uvxDist = agent.distribution.uvx;
+    const binName = uvxDist.package.split('==')[0]?.trim() || agent.id;
+    const detected = await detectCommandExecutable([binName], execDetectOptions);
+    if (detected.found && detected.resolvedPath) {
+      return {
+        command: detected.resolvedPath,
+        args: [...(uvxDist.args ?? []), ...(input.extraArgs ?? [])],
+        ...(uvxDist.env ? { env: { ...uvxDist.env } } : {}),
+        capabilitySourceVersion,
+      };
+    }
+    if (input.executablePath?.trim()) {
+      throw new Error(
+        `Configured executablePath for registry agent "${agent.id}" does not exist or is not executable: ${input.executablePath.trim()}`
+      );
+    }
+    return {
+      command: 'uvx',
+      args: [uvxDist.package, ...(uvxDist.args ?? []), ...(input.extraArgs ?? [])],
+      ...(uvxDist.env ? { env: { ...uvxDist.env } } : {}),
+      capabilitySourceVersion,
+    };
+  }
+
+  if (
+    getRegistryAcpLaunchKind(agent.distribution) === 'binary' &&
+    agent.distribution.binary
+  ) {
+    const platformArch = mapPlatformArch(input.platform);
+    const platformEntry = platformArch ? agent.distribution.binary[platformArch] : undefined;
+    // Check explicit executablePath or locally installed binary first
+    if (input.executablePath?.trim() || platformEntry) {
+      const cmdBasename = platformEntry ? basename(platformEntry.cmd) : agent.id;
+      const candidates =
+        cmdBasename.endsWith('.par')
+          ? [cmdBasename, cmdBasename.slice(0, -4)]
+          : [cmdBasename];
+      const detected = await detectCommandExecutable(candidates, execDetectOptions);
+      if (detected.found && detected.resolvedPath) {
+        return {
+          command: detected.resolvedPath,
+          args: [...(platformEntry?.args ?? []), ...(input.extraArgs ?? [])],
+          ...(platformEntry?.env ? { env: { ...platformEntry.env } } : {}),
+          capabilitySourceVersion,
+        };
+      }
+      if (input.executablePath?.trim()) {
+        throw new Error(
+          `Configured executablePath for registry agent "${agent.id}" does not exist or is not executable: ${input.executablePath.trim()}`
+        );
+      }
+    }
+
+    const launch = await getAcpBinaryManager(input.dataDir).ensureBinary(agent, {
+      signal: input.signal,
+    });
+    return {
+      command: launch.command,
+      args: [...launch.args, ...(input.extraArgs ?? [])],
+      ...(launch.env ? { env: { ...launch.env } } : {}),
+      capabilitySourceVersion,
+    };
+  }
+
+  throw new Error(`Registry ACP ${agent.id} has no supported launcher`);
 }
 
 export async function resolveACPProcessLaunchAsync(
@@ -191,7 +396,7 @@ export async function resolveACPProcessLaunchAsync(
 ): Promise<ResolvedACPProcessLaunch> {
   const capabilitySourceVersion = getAcpCapabilitySourceVersion(input);
 
-  if (input.agentType === 'custom') {
+  if (input.cliType === 'custom' || input.agentType === 'custom') {
     const configured = input.customCommand?.command.trim();
     if (!configured) {
       throw new Error('Custom ACP agent requires customCommand.command to be configured');
@@ -205,8 +410,22 @@ export async function resolveACPProcessLaunchAsync(
     };
   }
 
+  const shouldUseRegistry =
+    input.cliType === 'registry' ||
+    (input.cliType !== 'builtin' &&
+      !isBuiltinAgentType(input.agentType) &&
+      isRegistryAgentType(input.agentType));
+
+  if (shouldUseRegistry) {
+    const agent = getRegistryAgent(input.agentType);
+    if (!agent) {
+      throw new Error(`Unknown registry ACP agentType: ${normalizeRegistryAgentId(input.agentType)}`);
+    }
+    return await resolveRegistryAgentProcessLaunch(agent, input, capabilitySourceVersion);
+  }
+
   if (!isBuiltinAgentType(input.agentType)) {
-    throw new Error(`Unsupported builtin ACP agentType: ${String(input.agentType)}`);
+    throw new Error(`Unsupported ACP agentType: ${String(input.agentType)}`);
   }
 
   const resolveExec = async () =>
@@ -234,6 +453,28 @@ export async function resolveACPProcessLaunchAsync(
       });
       return {
         ...launch,
+        capabilitySourceVersion,
+      };
+    }
+
+    case 'bub': {
+      const resolvedBub = await resolveExec();
+      return {
+        command: resolvedBub,
+        args: ['acp', ...(input.extraArgs ?? [])],
+        capabilitySourceVersion,
+      };
+    }
+
+    case 'dimcode': {
+      const resolvedDimcode = await resolveExec();
+      return {
+        command: resolvedDimcode,
+        args: ['acp', ...(input.extraArgs ?? [])],
+        env: {
+          DIMCODE_DISABLE_AUTOUPDATE: '1',
+          DIMCODE_AUTOUPDATE: '0',
+        },
         capabilitySourceVersion,
       };
     }

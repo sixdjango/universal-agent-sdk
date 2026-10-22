@@ -11,6 +11,8 @@ export const BUILTIN_AGENT_TYPES = [
   'deepseek',
   'grok',
   'devin',
+  'bub',
+  'dimcode',
 ] as const;
 
 export type BuiltinAgentType = (typeof BUILTIN_AGENT_TYPES)[number];
@@ -36,6 +38,8 @@ export const AGENT_BINARY_CANDIDATES: Record<BuiltinAgentType, readonly string[]
   deepseek: ['dsh', 'npx'],
   grok: ['grok'],
   devin: ['devin'],
+  bub: ['bub'],
+  dimcode: ['dimcode'],
 };
 
 export const DEFAULT_ACP_RELATIVE_DIRS = [
@@ -134,10 +138,16 @@ function normalizeDir(dir: string): string {
   return normalized.length > 1 ? normalized.replace(/[\\/]+$/, '') : normalized;
 }
 
-export async function detectAgentExecutable(
-  agentType: BuiltinAgentType,
+export interface CommandExecutableResolution {
+  found: boolean;
+  resolvedPath?: string;
+  source?: ExecutableResolutionSource;
+}
+
+export async function detectCommandExecutable(
+  candidates: readonly string[],
   options: ResolveExecutableOptions = {}
-): Promise<AgentExecutableResolution> {
+): Promise<CommandExecutableResolution> {
   const platform = options.platform ?? process.platform;
   const homeDir = options.homeDir ?? homedir();
   const env = options.env ?? process.env;
@@ -148,33 +158,26 @@ export async function detectAgentExecutable(
     const resolvedExplicit = isAbsolute(expanded) ? expanded : resolve(expanded);
     if (isExecutableFile(resolvedExplicit, platform)) {
       return {
-        agentType,
         found: true,
         resolvedPath: resolvedExplicit,
         source: 'override',
       };
     }
-    // On Windows an explicit path might omit .exe/.cmd
     if (platform === 'win32') {
       const parent = resolve(resolvedExplicit, '..');
       const base = resolvedExplicit.slice(parent.length).replace(/^[\\/]+/, '');
       const matched = findExecutableInDir(parent, base, { platform, env });
       if (matched) {
         return {
-          agentType,
           found: true,
           resolvedPath: matched,
           source: 'override',
         };
       }
     }
-    return {
-      agentType,
-      found: false,
-    };
+    return { found: false };
   }
 
-  const candidates = AGENT_BINARY_CANDIDATES[agentType];
   const pathDelimiter = platform === 'win32' ? ';' : delimiter;
   const pathDirs = getPathEnvValue(env, platform)
     .split(pathDelimiter)
@@ -189,7 +192,7 @@ export async function detectAgentExecutable(
     for (const bin of candidates) {
       const found = findExecutableInDir(dir, bin, { platform, env });
       if (found) {
-        return { agentType, found: true, resolvedPath: found, source: 'path' };
+        return { found: true, resolvedPath: found, source: 'path' };
       }
     }
   }
@@ -213,7 +216,7 @@ export async function detectAgentExecutable(
       for (const bin of candidates) {
         const found = findExecutableInDir(dir, bin, { platform, env: shellEnv });
         if (found) {
-          return { agentType, found: true, resolvedPath: found, source: 'login-shell' };
+          return { found: true, resolvedPath: found, source: 'login-shell' };
         }
       }
     }
@@ -228,13 +231,27 @@ export async function detectAgentExecutable(
       for (const bin of candidates) {
         const found = findExecutableInDir(dir, bin, { platform, env });
         if (found) {
-          return { agentType, found: true, resolvedPath: found, source: 'default-dir' };
+          return { found: true, resolvedPath: found, source: 'default-dir' };
         }
       }
     }
   }
 
-  return { agentType, found: false };
+  return { found: false };
+}
+
+export async function detectAgentExecutable(
+  agentType: BuiltinAgentType,
+  options: ResolveExecutableOptions = {}
+): Promise<AgentExecutableResolution> {
+  const candidates = AGENT_BINARY_CANDIDATES[agentType];
+  const res = await detectCommandExecutable(candidates, options);
+  return {
+    agentType,
+    found: res.found,
+    ...(res.resolvedPath ? { resolvedPath: res.resolvedPath } : {}),
+    ...(res.source ? { source: res.source } : {}),
+  };
 }
 
 export async function resolveAgentExecutable(

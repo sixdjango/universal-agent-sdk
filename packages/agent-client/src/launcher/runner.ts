@@ -61,7 +61,13 @@ import type {
   StartAgentSessionOptions,
 } from '../types';
 import { resolveDeepSeekHarnessSpawn } from './deepseek-runtime';
+import { isBuiltinAgentType } from './executable-resolver';
 import { runNpxStartupWithRecovery, withManagedNpmCacheForNpx } from './npx-cache';
+import {
+  isRegistryAgentType,
+  normalizeRegistryAgentId,
+  type RegistryAgentId,
+} from './registry';
 import {
   mergeACPProcessEnv,
   mergeLoginShellEnv,
@@ -414,13 +420,14 @@ async function startLocalAcpProtocol<T extends object>(
   retainCleanupFailure = false
 ): Promise<{ agentProcess: ChildProcess; capabilitySourceVersion?: string } & T> {
   options.signal?.throwIfAborted();
-  const resolvedAgentType: BuiltinAgentType | 'custom' =
+  const resolvedAgentType: string =
     options.cliType === 'custom' || options.agentType === 'custom'
       ? 'custom'
-      : (options.agentType as BuiltinAgentType);
+      : options.agentType;
 
   const loginShellEnv = await getLoginShellEnv();
   const launch = await resolveACPProcessLaunchAsync({
+    cliType: options.cliType,
     agentType: resolvedAgentType,
     executablePath: options.executablePath,
     customCommand: options.customCommand,
@@ -430,6 +437,7 @@ async function startLocalAcpProtocol<T extends object>(
     env: options.env,
     loginShellEnv,
     extraArgs: options.extraArgs,
+    signal: options.signal,
   });
   options.signal?.throwIfAborted();
 
@@ -723,7 +731,7 @@ interface NormalizedLaunchOptions {
 
 function normalizeTargetOptions(input: {
   target?: AgentLaunchTarget;
-  agentType?: BuiltinAgentType | 'custom';
+  agentType?: BuiltinAgentType | RegistryAgentId | 'custom' | (string & {});
   executablePath?: string;
   customCommand?: CustomAcpLaunchSpec;
   piExtensions?: string[];
@@ -740,6 +748,14 @@ function normalizeTargetOptions(input: {
           args: input.target.args,
         },
         extraArgs: input.extraArgs,
+      };
+    }
+    if (input.target.cliType === 'registry') {
+      return {
+        cliType: 'registry',
+        agentType: normalizeRegistryAgentId(input.target.agentType),
+        executablePath: input.target.executablePath ?? input.executablePath,
+        extraArgs: input.target.extraArgs ?? input.extraArgs,
       };
     }
     return {
@@ -765,6 +781,15 @@ function normalizeTargetOptions(input: {
     };
   }
 
+  if (!isBuiltinAgentType(input.agentType) && isRegistryAgentType(input.agentType)) {
+    return {
+      cliType: 'registry',
+      agentType: normalizeRegistryAgentId(input.agentType),
+      executablePath: input.executablePath,
+      extraArgs: input.extraArgs,
+    };
+  }
+
   return {
     cliType: 'builtin',
     agentType: input.agentType,
@@ -777,7 +802,7 @@ function normalizeTargetOptions(input: {
 
 export type ProbeAgentCapabilitiesOptions = {
   target?: AgentLaunchTarget;
-  agentType?: BuiltinAgentType | 'custom';
+  agentType?: BuiltinAgentType | RegistryAgentId | 'custom' | (string & {});
   executablePath?: string;
   customCommand?: CustomAcpLaunchSpec;
   piExtensions?: string[];
@@ -856,7 +881,7 @@ export async function probeAgentCapabilities(
 
 export type QueryAgentRateLimitsOptions = {
   target?: AgentLaunchTarget;
-  agentType?: BuiltinAgentType | 'custom';
+  agentType?: BuiltinAgentType | RegistryAgentId | 'custom' | (string & {});
   executablePath?: string;
   customCommand?: CustomAcpLaunchSpec;
   piExtensions?: string[];

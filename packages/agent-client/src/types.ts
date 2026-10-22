@@ -12,12 +12,20 @@ import { isSubagentEvent } from '@universal-agent/acp-extension-core';
 import { z } from 'zod';
 import type { BuiltinAgentType } from './launcher/executable-resolver';
 import type { AcpStartupTimeoutOptions } from './launcher/npx-cache';
+import type { RegistryAgentId } from './launcher/registry';
 import type { CustomAcpLaunchSpec } from './launcher/setting';
 import type { Logger } from './process/stream';
 import type { TerminalManager } from './process/terminal-manager';
 import type { AgentClient } from './client/agent-client';
 
-export type { BuiltinAgentType, CustomAcpLaunchSpec, Logger, TerminalManager, AcpStartupTimeoutOptions };
+export type {
+  BuiltinAgentType,
+  RegistryAgentId,
+  CustomAcpLaunchSpec,
+  Logger,
+  TerminalManager,
+  AcpStartupTimeoutOptions,
+};
 
 export type AgentConfigCliType = 'builtin' | 'registry' | 'custom';
 export type ACPSessionId = string;
@@ -379,6 +387,13 @@ export type AgentLaunchTarget =
       extraArgs?: string[];
     }
   | {
+      cliType: 'registry';
+      agentType: RegistryAgentId | (string & {});
+      /** Optional: override local executable path */
+      executablePath?: string;
+      extraArgs?: string[];
+    }
+  | {
       cliType: 'custom';
       agentType: string;
       command: string;
@@ -388,10 +403,10 @@ export type AgentLaunchTarget =
 export type StartAgentSessionOptions = {
   /** Optional host session identifier (defaults to a random UUID) */
   sessionId?: string;
-  /** Structured launch target (builtin or custom) */
+  /** Structured launch target (builtin, registry, or custom) */
   target?: AgentLaunchTarget;
-  /** Builtin Agent type or 'custom' (shorthand alternative to `target`) */
-  agentType?: BuiltinAgentType | 'custom';
+  /** Builtin Agent type, Registry Agent ID (e.g. 'antigravity-acp', 'antigravity', 'gemini', 'cursor', 'opencode'), or 'custom' */
+  agentType?: BuiltinAgentType | RegistryAgentId | 'custom' | (string & {});
   /** Working directory */
   workdir: string;
   /** Optional: explicitly specify the local Agent CLI executable path (highest priority) */

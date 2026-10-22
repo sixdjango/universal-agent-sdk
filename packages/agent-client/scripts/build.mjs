@@ -30,7 +30,9 @@ const externalPackages = [
   'cross-spawn',
   'diff',
   'open',
+  'tar',
   'vscode-jsonrpc',
+  'yauzl',
   'zod',
   'fsevents',
 ];
