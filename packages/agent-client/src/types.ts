@@ -17,6 +17,8 @@ import type { CustomAcpLaunchSpec } from './launcher/setting';
 import type { Logger } from './process/stream';
 import type { TerminalManager } from './process/terminal-manager';
 import type { AgentClient } from './client/agent-client';
+import type { SessionHistoryAccumulator } from './history/accumulator';
+import type { MessageContent, SessionHistoryEntry } from './history/types';
 
 export type {
   BuiltinAgentType,
@@ -452,7 +454,11 @@ export type StartAgentSessionOptions = {
   resolveWorktreeProject?: () => Promise<WorktreeProject>;
 
   /** Core event callbacks */
-  onUpdateMessage: (notification: AcpSessionNotification) => void;
+  onUpdateMessage?: (notification: AcpSessionNotification) => void;
+  /** Optional callback fired whenever the unified turn/message history changes */
+  onHistoryChange?: (history: SessionHistoryEntry[]) => void;
+  /** Optional initial history entries to seed the session history accumulator */
+  initialHistory?: SessionHistoryEntry[];
   onRequestPermission: (
     requestId: string,
     request: acp.RequestPermissionRequest
@@ -487,6 +493,14 @@ export interface ManagedAgentSession {
   readonly client: AgentClient;
   readonly sessionResponse: acp.NewSessionResponse;
   readonly capabilities: ExtensionCapabilities;
+  readonly historyAccumulator: SessionHistoryAccumulator;
+
+  /** Return the unified `SessionHistoryEntry[]` turn list materialized from session notifications */
+  getHistory(): SessionHistoryEntry[];
+  /** Return the latest assistant turn entry, if any */
+  getLatestAssistantTurn(): SessionHistoryEntry | undefined;
+  /** Return the unified `MessageContent[]` items of the latest assistant turn */
+  getLatestAssistantItems(): MessageContent[];
 
   /** Send a user prompt (supports text, images, files, and goal control) */
   prompt(

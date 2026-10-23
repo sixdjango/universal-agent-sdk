@@ -319,3 +319,7 @@ export {
   type AcpSessionRunConfig,
   type AcpSessionRunConfigApplyResult,
 } from './client/config-applier';
+
+// Unified Message & Turn History Materializer
+export * from './history';
+

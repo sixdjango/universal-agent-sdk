@@ -26,6 +26,7 @@ import {
 } from '../client/capability-norm';
 import { applyAcpSessionRunConfig } from '../client/config-applier';
 import { parseExtensionCapabilities, parseRateLimitsSnapshot } from '../client/extension-parser';
+import { SessionHistoryAccumulator } from '../history/accumulator';
 import { getLoginShellEnv } from '../process/login-shell-env';
 import {
   type NodeProcessApi,
@@ -934,6 +935,11 @@ export async function startAgentSession(
   const initialConfigOptionValues =
     options.initialConfig?.configOptionValues ?? options.configOptionValues;
 
+  const historyAccumulator = new SessionHistoryAccumulator({
+    initialHistory: options.initialHistory,
+    onChange: options.onHistoryChange,
+  });
+
   const started = await startLocalAcpAgent({
     ...normalizedTarget,
     sessionId,
@@ -952,7 +958,10 @@ export async function startAgentSession(
     resolveMcpServers: options.resolveMcpServers,
     resolveWorktreeProject: options.resolveWorktreeProject,
     onStartupStage: options.onStartupStage,
-    onUpdateMessage: options.onUpdateMessage,
+    onUpdateMessage: (notification) => {
+      historyAccumulator.applyNotification(notification);
+      options.onUpdateMessage?.(notification);
+    },
     onRequestPermission: options.onRequestPermission,
     onUsageUpdate: options.onUsageUpdate,
     onContextWindowUsageUpdate: options.onContextWindowUsageUpdate,
@@ -1019,10 +1028,28 @@ export async function startAgentSession(
     get capabilities() {
       return started.client.getExtensionCapabilities();
     },
+    historyAccumulator,
+
+    getHistory() {
+      return historyAccumulator.getHistory();
+    },
+
+    getLatestAssistantTurn() {
+      return historyAccumulator.getLatestAssistantTurn();
+    },
+
+    getLatestAssistantItems() {
+      return historyAccumulator.getLatestAssistantItems();
+    },
 
     async prompt(blocks, promptOptions) {
+      historyAccumulator.appendUserTurn(blocks);
       const currentSessionId = started.client.getAcpSessionId() ?? started.acpSessionId;
-      return await started.client.prompt(currentSessionId, blocks, promptOptions);
+      try {
+        return await started.client.prompt(currentSessionId, blocks, promptOptions);
+      } finally {
+        historyAccumulator.completeActiveAssistantTurn();
+      }
     },
 
     steer(blocks, steerOptions) {
