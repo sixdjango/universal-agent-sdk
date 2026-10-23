@@ -40,8 +40,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
+
+      - name: Upgrade npm for OIDC Trusted Publishing support (npm >= 11.5.1)
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -59,13 +61,20 @@ jobs:
           pnpm run build
           pnpm run test
 
-      - name: Publish @universal-agent/acp-extension-core and @universal-agent/client to npm
+      - name: Pack & Publish @universal-agent/acp-extension-core and @universal-agent/client via OIDC
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.dist_tag || 'latest' }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::Missing NPM_TOKEN secret. Please add NPM_TOKEN in GitHub Repository Settings -> Secrets and variables -> Actions."
-            exit 1
+          # If NPM_TOKEN is optionally provided, configure it; otherwise npm >= 11.5.1
+          # automatically uses GitHub Actions OIDC Trusted Publishing (id-token: write).
+          if [ -n "$NPM_TOKEN" ]; then
+            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
           fi
-          pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client publish --access public --no-git-checks --tag "$NPM_DIST_TAG"
+
+          for pkg_dir in packages/acp-extension-core packages/agent-client; do
+            echo "Packing $pkg_dir (resolving workspace:* protocol)..."
+            tarball=$(cd "$pkg_dir" && pnpm pack | tail -n 1)
+            echo "Publishing $pkg_dir/$tarball to npm..."
+            npm publish "$pkg_dir/$tarball" --access public --provenance --tag "$NPM_DIST_TAG"
+          done
