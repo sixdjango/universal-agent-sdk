@@ -1,0 +1,31 @@
+/* Design tokens (colors, radii, fonts, easing). Override these to theme the components. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0f0f10;
+  --dot: #2a2a2d;
+  --card: #18181a;
+  --card-raised: #1c1c1f;
+  --row: #202023;
+  --row-hover: #26262a;
+  --border: #29292d;
+  --border-strong: #3a3a3f;
+  --text: #ececee;
+  --text-2: #9a9aa0;
+  --text-3: #66666c;
+  --edge: #3d3d42;
+  --edge-delivered: #75757c;
+  --danger: #e5484d;
+  --danger-soft: rgba(229, 72, 77, 0.1);
+  --danger-border: rgba(229, 72, 77, 0.55);
+  --warn: #f2a93b;
+  --warn-soft: rgba(242, 169, 59, 0.1);
+  --warn-border: rgba(242, 169, 59, 0.5);
+  --ok: #4cc38a;
+  --ok-soft: rgba(76, 195, 138, 0.1);
+  --active: #f4f4f5;
+  --radius: 12px;
+  --font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}

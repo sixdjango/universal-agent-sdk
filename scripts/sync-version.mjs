@@ -18,6 +18,13 @@ const packageJsonPaths = [
   resolve(repoRoot, 'package.json'),
   resolve(repoRoot, 'packages/acp-extension-core/package.json'),
   resolve(repoRoot, 'packages/agent-client/package.json'),
+  resolve(repoRoot, 'packages/workflow-contract/package.json'),
+  resolve(repoRoot, 'packages/workflow-runtime/package.json'),
+  resolve(repoRoot, 'packages/workflow-node/package.json'),
+  resolve(repoRoot, 'packages/workflow-agents/package.json'),
+  resolve(repoRoot, 'packages/workflow-ui/package.json'),
+  resolve(repoRoot, 'packages/workflow-web/package.json'),
+  resolve(repoRoot, 'packages/workflow-server/package.json'),
 ];
 
 const rootPkg = JSON.parse(readFileSync(packageJsonPaths[0], 'utf8'));
@@ -32,9 +39,13 @@ for (const pkgPath of packageJsonPaths) {
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
   pkg.version = normalizedVersion;
 
-  if (preparePublish && pkg.name === '@universal-agent/client') {
-    if (pkg.dependencies?.['@universal-agent/acp-extension-core']?.startsWith('workspace:')) {
-      pkg.dependencies['@universal-agent/acp-extension-core'] = normalizedVersion;
+  if (preparePublish) {
+    if (pkg.dependencies) {
+      for (const [dep, spec] of Object.entries(pkg.dependencies)) {
+        if (typeof spec === 'string' && spec.startsWith('workspace:')) {
+          pkg.dependencies[dep] = normalizedVersion;
+        }
+      }
     }
     if (pkg.devDependencies) {
       for (const [dep, spec] of Object.entries(pkg.devDependencies)) {

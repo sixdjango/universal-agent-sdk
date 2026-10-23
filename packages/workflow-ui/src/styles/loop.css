@@ -1,0 +1,170 @@
+/* Loops: the rule on a loop card, the deciding step and the way back round inside its body. */
+
+.loop-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0 12px 8px;
+  padding: 9px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.loop-line {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.loop-key {
+  color: var(--text-3);
+}
+
+.loop-value {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.loop-pips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.loop-pip {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+}
+
+.loop-pip[data-extra='true'] {
+  border-style: dashed;
+}
+
+.loop-pip[data-state='running'] {
+  border-color: var(--active);
+  box-shadow: 0 0 0 3px rgba(244, 244, 245, 0.12);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.loop-pip[data-state='again'] {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.loop-pip[data-state='passed'],
+.loop-pip[data-state='done'] {
+  border-color: transparent;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.loop-pip[data-state='failed'] {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.loop-limit {
+  margin-left: 4px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.loop-decider {
+  margin: 0 12px 8px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: var(--warn-soft);
+  font-size: 11.5px;
+  color: var(--warn);
+}
+
+.loop-decider.loop-start {
+  background: var(--row);
+  color: var(--text-2);
+}
+
+.react-flow__handle.loop-handle {
+  width: 8px;
+  height: 8px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.loop-edge {
+  fill: none;
+  stroke: var(--warn-border);
+  stroke-width: 1.4;
+  stroke-dasharray: 5 5;
+}
+
+.loop-edge[data-tone='delivered'] {
+  stroke: var(--warn);
+  stroke-dasharray: none;
+}
+
+.loop-edge-arrow {
+  fill: none;
+  stroke: var(--warn-border);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.loop-edge-arrow[data-tone='delivered'] {
+  stroke: var(--warn);
+}
+
+.loop-edge-label {
+  position: absolute;
+  padding: 3px 9px;
+  border: 1px solid var(--warn-border);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--warn);
+  pointer-events: none;
+}
+
+.scope-banner {
+  position: absolute;
+  /* Below the app's title, breadcrumbs and round switcher. */
+  top: 136px;
+  left: 50%;
+  z-index: 5;
+  width: min(560px, calc(100% - 48px));
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.scope-banner[data-kind='loop'] {
+  border-color: var(--warn-border);
+}
+
+.scope-banner-title {
+  margin-bottom: 2px;
+  font-weight: 500;
+  color: var(--text);
+}

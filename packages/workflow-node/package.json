@@ -1,0 +1,56 @@
+{
+  "name": "@universal-agent/workflow-node",
+  "version": "0.1.2",
+  "description": "Node.js host for the Universal Agent Workflow Kit: SQLite (node:sqlite + Drizzle) stores, UniversalAgentExecutor and ScriptExecutor, and WorkflowHost (workflow library, workspaces with per-run git worktrees, background run service)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sixdjango/universal-agent-sdk.git",
+    "directory": "packages/workflow-node"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ua-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "drizzle",
+    "drizzle-host"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/build-workflow-package.mjs --platform node --entries index,mcp-bridge",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "db:generate:host": "drizzle-kit generate --config drizzle.host.config.ts"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "sideEffects": false,
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@universal-agent/client": "workspace:*",
+    "@universal-agent/workflow-contract": "workspace:*",
+    "@universal-agent/workflow-runtime": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "drizzle-kit": "1.0.0-rc.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

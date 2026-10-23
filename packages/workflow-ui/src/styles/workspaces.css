@@ -1,0 +1,45 @@
+/* Workspaces panel. */
+
+.workspace-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 168px 24px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.workspace-item:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.03));
+}
+
+.workspace-main {
+  min-width: 0;
+}
+
+.workspace-main .option-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Long paths keep their end visible: truncate from the left, but lay the path out left to right. */
+.path-tail {
+  direction: rtl;
+  text-align: left;
+}
+
+.path-tail span {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.workspace-item select {
+  height: 30px;
+  font-size: 12px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 11px;
+}

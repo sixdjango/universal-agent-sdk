@@ -1,0 +1,236 @@
+/* Application shell of the bundled web app (top bar, empty state, toasts). */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------- shell */
+.app {
+  position: relative;
+  height: 100%;
+}
+
+.topbar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 24px 28px;
+  pointer-events: none;
+}
+
+.topbar > * {
+  pointer-events: auto;
+}
+
+.title-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.title-button .chev {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.subtitle {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  /* Above the chief dock. */
+  bottom: 96px;
+  z-index: 40;
+  max-width: 560px;
+  padding: 10px 14px;
+  border: 1px solid var(--danger-border);
+  border-radius: 10px;
+  background: var(--card-raised);
+  font-size: 13px;
+  color: var(--text);
+  transform: translateX(-50%);
+  animation: pop-in 0.2s var(--ease) both;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.empty-card {
+  width: 380px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  text-align: center;
+  animation: card-in 0.5s var(--ease) both;
+}
+
+.empty-card h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.empty-card p {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    flex-direction: column;
+    padding: 16px;
+  }
+
+  .app .zoom {
+    right: 16px;
+  }
+}
+
+.issue-item {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.issue-item:hover {
+  background: var(--row-hover);
+}
+
+.issue-item span {
+  display: block;
+  font: 11px var(--mono);
+  color: var(--danger);
+}
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 12.5px;
+}
+
+.crumbs button {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.crumbs button:hover {
+  background: var(--row-hover);
+  color: var(--text);
+}
+
+.crumbs button[aria-current='true'] {
+  color: var(--text);
+  cursor: default;
+}
+
+.crumbs .sep {
+  color: var(--text-3);
+}
+
+.instances {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.instances .chip {
+  height: 26px;
+  background: none;
+  cursor: pointer;
+}
+
+.instances .chip[aria-pressed='true'] {
+  border-color: var(--text-2);
+  background: var(--row);
+}
+
+/* ---------------------------------------------------------------- view switch & trace waterfall */
+.view-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--card);
+}
+
+.view-switch-btn {
+  height: 24px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.view-switch-btn:hover {
+  color: var(--text);
+}
+
+.view-switch-btn[data-active='true'] {
+  background: var(--row-hover);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}

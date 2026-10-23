@@ -1,0 +1,258 @@
+/* Shared controls: buttons, pills, chips, menus and popovers, form fields. */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.pill[data-tone='danger'] {
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.pill[data-tone='warn'] {
+  color: var(--warn);
+  border-color: var(--warn-border);
+}
+
+.pill[data-tone='ok'] {
+  color: var(--text);
+}
+
+.pill[data-tone='active'] .dot {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn:hover {
+  background: var(--row-hover);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--text);
+  border-color: var(--text);
+  color: #111;
+  font-weight: 500;
+}
+
+.btn-primary:hover {
+  background: #fff;
+}
+
+.kbd {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.12);
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.6;
+}
+
+/* ---------------------------------------------------------------- menus & popovers */
+.menu,
+.popover {
+  position: absolute;
+  z-index: 30;
+  min-width: 240px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--card-raised);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  animation: pop-in 0.16s var(--ease) both;
+}
+
+.menu-label,
+.popover-label {
+  padding: 6px 8px 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.option:hover,
+.option[data-selected='true'] {
+  background: var(--row-hover);
+}
+
+.option-title {
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.option-desc {
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.option-desc[data-tone='danger'] {
+  color: var(--danger);
+}
+
+.option .check {
+  color: var(--text-2);
+}
+
+.popover-footer {
+  padding: 6px 2px 2px;
+}
+
+.popover-footer .btn {
+  width: 100%;
+  height: 34px;
+}
+
+.popover-note {
+  padding: 4px 8px 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.field {
+  display: block;
+  padding: 4px 8px 8px;
+}
+
+.field span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+textarea,
+input[type='text'] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 var(--font);
+  resize: vertical;
+  outline: none;
+}
+
+textarea:focus,
+input[type='text']:focus {
+  border-color: #5a5a60;
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.icon-btn:hover {
+  background: var(--row-hover);
+  color: var(--text);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.chip-tag {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.chip[data-tone='danger'] {
+  border-color: var(--danger-border);
+}
+
+.chip[data-tone='danger'] .chip-tag {
+  color: var(--danger);
+}
+
+.chip[data-tone='warn'] {
+  border-color: var(--warn-border);
+}
+
+.chip[data-tone='warn'] .chip-tag {
+  color: var(--warn);
+}
+
+select {
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px var(--font);
+}
+
+.icon-btn.visible {
+  opacity: 1;
+}
+
+.btn.open-scope {
+  width: calc(100% - 16px);
+  margin: 2px 8px 6px;
+  height: 34px;
+}

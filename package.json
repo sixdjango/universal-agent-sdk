@@ -6,13 +6,16 @@
   "type": "module",
   "scripts": {
     "prepare:adapters": "pnpm --filter @universal-agent/acp-extension-core build && pnpm --filter \"./packages/adapters/*\" build",
-    "build": "pnpm run prepare:adapters && pnpm --filter @universal-agent/client build",
-    "typecheck": "pnpm run prepare:adapters && pnpm -r run typecheck",
-    "test": "pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client run test",
+    "build:workflow": "pnpm --filter @universal-agent/workflow-contract build && pnpm --filter @universal-agent/workflow-runtime build && pnpm --filter @universal-agent/workflow-node build && pnpm --filter @universal-agent/workflow-agents build && pnpm --filter @universal-agent/workflow-ui build && pnpm --filter @universal-agent/workflow-web build && pnpm --filter @universal-agent/workflow-server build",
+    "build": "pnpm run prepare:adapters && pnpm --filter @universal-agent/client build && pnpm run build:workflow",
+    "typecheck": "pnpm run build && pnpm -r run typecheck",
+    "test": "pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client --filter @universal-agent/workflow-contract --filter @universal-agent/workflow-runtime --filter @universal-agent/workflow-node --filter @universal-agent/workflow-agents --filter @universal-agent/workflow-ui --filter @universal-agent/workflow-web --filter @universal-agent/workflow-server run test",
     "test:all": "pnpm -r run test",
+    "dev:workflow": "pnpm --parallel --filter @universal-agent/workflow-server --filter @universal-agent/workflow-web run dev",
+    "test:workflow-dist": "pnpm run build:workflow && pnpm --filter @universal-agent/workflow-agents run test:dist",
     "clean": "pnpm -r run clean",
     "release:version": "node scripts/sync-version.mjs",
-    "release:publish": "pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client publish --access public --no-git-checks"
+    "release:publish": "pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client --filter @universal-agent/workflow-contract --filter @universal-agent/workflow-runtime --filter @universal-agent/workflow-node --filter @universal-agent/workflow-agents --filter @universal-agent/workflow-ui --filter @universal-agent/workflow-web --filter @universal-agent/workflow-server publish --access public --no-git-checks"
   },
   "engines": {
     "node": ">=22.0.0"

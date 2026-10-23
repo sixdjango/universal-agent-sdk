@@ -1,0 +1,61 @@
+{
+  "name": "@universal-agent/workflow-ui",
+  "version": "0.1.2",
+  "description": "React components for Universal Agent workflows: canvas editor, inspector, run trace, chief dock, and their view models",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sixdjango/universal-agent-sdk.git",
+    "directory": "packages/workflow-ui"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ua-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": {
+      "ua-source": "./src/styles/index.css",
+      "default": "./dist/styles.css"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.build.json && node scripts/finish-build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
+  },
+  "sideEffects": [
+    "*.css"
+  ],
+  "dependencies": {
+    "@universal-agent/workflow-contract": "workspace:*",
+    "@universal-agent/workflow-runtime": "workspace:*"
+  },
+  "peerDependencies": {
+    "@xyflow/react": "^12.12.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "@xyflow/react": "12.12.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "^5.9.3",
+    "vite": "8.3.4",
+    "vitest": "^3.2.4"
+  }
+}

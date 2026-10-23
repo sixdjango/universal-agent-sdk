@@ -1,0 +1,62 @@
+{
+  "name": "@universal-agent/workflow-server",
+  "version": "0.1.2",
+  "description": "Local Fastify server for Universal Agent Workflow Kit: workflow library, runs, agents and live run streams on the workflow-node database, serving the workflow web canvas",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sixdjango/universal-agent-sdk.git",
+    "directory": "packages/workflow-server"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "universal-agent-workflow": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "ua-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/build-workflow-package.mjs --platform node --entries index,cli",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/cli.js",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "demo": "tsx --conditions=ua-source scripts/demo-server.mjs",
+    "dev": "tsx watch --conditions=ua-source --clear-screen=false src/cli.ts",
+    "dev:demo": "tsx watch --conditions=ua-source --clear-screen=false scripts/demo-server.mjs",
+    "seed:test": "tsx --conditions=ua-source scripts/seed-test-workflows.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "sideEffects": false,
+  "dependencies": {
+    "@fastify/static": "10.1.5",
+    "@universal-agent/workflow-agents": "workspace:*",
+    "@universal-agent/workflow-contract": "workspace:*",
+    "@universal-agent/workflow-node": "workspace:*",
+    "@universal-agent/workflow-runtime": "workspace:*",
+    "@universal-agent/workflow-web": "workspace:*",
+    "fastify": "5.12.5",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

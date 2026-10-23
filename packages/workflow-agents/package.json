@@ -1,0 +1,54 @@
+{
+  "name": "@universal-agent/workflow-agents",
+  "version": "0.1.2",
+  "description": "Agent layer on top of @universal-agent/workflow-node: versioned agent profiles stored in the workflow database, and the LLM chief supervisor",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sixdjango/universal-agent-sdk.git",
+    "directory": "packages/workflow-agents"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "ua-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "drizzle"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/build-workflow-package.mjs --platform node",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "test:dist": "node scripts/smoke-dist.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "sideEffects": false,
+  "dependencies": {
+    "@universal-agent/workflow-contract": "workspace:*",
+    "@universal-agent/workflow-node": "workspace:*",
+    "@universal-agent/workflow-runtime": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "drizzle-kit": "1.0.0-rc.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

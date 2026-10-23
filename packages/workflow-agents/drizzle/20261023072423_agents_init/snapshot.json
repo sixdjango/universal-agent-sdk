@@ -1,0 +1,138 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "6b3ed971-9523-4158-b033-da8a4132ba86",
+  "prevIds": [
+    "00000000-0000-0000-0000-000000000000"
+  ],
+  "ddl": [
+    {
+      "name": "agent_versions",
+      "entityType": "tables"
+    },
+    {
+      "name": "agents",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_id",
+      "entityType": "columns",
+      "table": "agent_versions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "version",
+      "entityType": "columns",
+      "table": "agent_versions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "digest",
+      "entityType": "columns",
+      "table": "agent_versions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "profile_json",
+      "entityType": "columns",
+      "table": "agent_versions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at_ms",
+      "entityType": "columns",
+      "table": "agent_versions"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_id",
+      "entityType": "columns",
+      "table": "agents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "agents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "latest_version",
+      "entityType": "columns",
+      "table": "agents"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at_ms",
+      "entityType": "columns",
+      "table": "agents"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at_ms",
+      "entityType": "columns",
+      "table": "agents"
+    },
+    {
+      "columns": [
+        "agent_id",
+        "version"
+      ],
+      "nameExplicit": false,
+      "name": "agent_versions_pk",
+      "entityType": "pks",
+      "table": "agent_versions"
+    },
+    {
+      "columns": [
+        "agent_id"
+      ],
+      "nameExplicit": false,
+      "name": "agents_pk",
+      "table": "agents",
+      "entityType": "pks"
+    }
+  ],
+  "renames": []
+}

@@ -28,7 +28,7 @@
     "presets"
   ],
   "scripts": {
-    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json",
+    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json && node ../../scripts/fix-dts-extensions.mjs dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "clean": "rm -rf dist presets"

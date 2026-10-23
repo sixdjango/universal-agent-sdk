@@ -7,7 +7,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@universal-agent/client": "workspace:*"
+    "@universal-agent/client": "workspace:*",
+    "@universal-agent/workflow-contract": "workspace:*",
+    "@universal-agent/workflow-runtime": "workspace:*",
+    "@universal-agent/workflow-node": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
