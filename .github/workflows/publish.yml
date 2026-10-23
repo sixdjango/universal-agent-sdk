@@ -55,26 +55,29 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: pnpm run release:version
 
-      - name: Build and verify packages
+      - name: Build and verify SDK packages
         run: |
-          pnpm run typecheck
           pnpm run build
-          pnpm run test
+          pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client run typecheck
+          pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client run test
 
-      - name: Pack & Publish @universal-agent/acp-extension-core and @universal-agent/client via OIDC
+      - name: Prepare package.json files for npm publish
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node scripts/sync-version.mjs --prepare-publish
+
+      - name: Publish @universal-agent/acp-extension-core and @universal-agent/client via OIDC
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.dist_tag || 'latest' }}
         run: |
-          # If NPM_TOKEN is optionally provided, configure it; otherwise npm >= 11.5.1
-          # automatically uses GitHub Actions OIDC Trusted Publishing (id-token: write).
           if [ -n "$NPM_TOKEN" ]; then
             npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
           fi
 
           for pkg_dir in packages/acp-extension-core packages/agent-client; do
-            echo "Packing $pkg_dir (resolving workspace:* protocol)..."
-            tarball=$(cd "$pkg_dir" && pnpm pack | tail -n 1)
-            echo "Publishing $pkg_dir/$tarball to npm..."
-            npm publish "$pkg_dir/$tarball" --access public --provenance --tag "$NPM_DIST_TAG"
+            echo "Publishing $pkg_dir to npm..."
+            (cd "$pkg_dir" && npm publish --access public --tag "$NPM_DIST_TAG")
           done
