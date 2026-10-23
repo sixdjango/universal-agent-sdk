@@ -23,6 +23,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Build, Test & Publish (@universal-agent/*)
@@ -81,6 +85,10 @@ jobs:
           for pkg_dir in packages/acp-extension-core packages/agent-client; do
             pkg_name=$(node -p "require('./$pkg_dir/package.json').name")
             pkg_version=$(node -p "require('./$pkg_dir/package.json').version")
+            if npm view "${pkg_name}@${pkg_version}" version >/dev/null 2>&1; then
+              echo "Skipping ${pkg_name}@${pkg_version} (already published on npm)."
+              continue
+            fi
             echo "Publishing $pkg_name@$pkg_version from $pkg_dir (provenance=$NPM_PROVENANCE)..."
             (cd "$pkg_dir" && npm publish --access public --provenance="$NPM_PROVENANCE" --tag "$NPM_DIST_TAG")
           done
