@@ -72,12 +72,15 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.dist_tag || 'latest' }}
+          NPM_PROVENANCE: ${{ !github.event.repository.private }}
         run: |
           if [ -n "$NPM_TOKEN" ]; then
             npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
           fi
 
           for pkg_dir in packages/acp-extension-core packages/agent-client; do
-            echo "Publishing $pkg_dir to npm..."
-            (cd "$pkg_dir" && npm publish --access public --tag "$NPM_DIST_TAG")
+            pkg_name=$(node -p "require('./$pkg_dir/package.json').name")
+            pkg_version=$(node -p "require('./$pkg_dir/package.json').version")
+            echo "Publishing $pkg_name@$pkg_version from $pkg_dir (provenance=$NPM_PROVENANCE)..."
+            (cd "$pkg_dir" && npm publish --access public --provenance="$NPM_PROVENANCE" --tag "$NPM_DIST_TAG")
           done
