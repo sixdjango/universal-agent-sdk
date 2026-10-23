@@ -1,0 +1,71 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional version to publish (e.g. 0.1.0). Leave empty to use package.json version.'
+        required: false
+        type: string
+      dist_tag:
+        description: 'npm dist-tag (e.g. latest, beta, next)'
+        required: false
+        default: 'latest'
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build, Test & Publish (@universal-agent/*)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync package versions
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: pnpm run release:version
+
+      - name: Build and verify packages
+        run: |
+          pnpm run typecheck
+          pnpm run build
+          pnpm run test
+
+      - name: Publish @universal-agent/acp-extension-core and @universal-agent/client to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_DIST_TAG: ${{ inputs.dist_tag || 'latest' }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::Missing NPM_TOKEN secret. Please add NPM_TOKEN in GitHub Repository Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client publish --access public --no-git-checks --tag "$NPM_DIST_TAG"

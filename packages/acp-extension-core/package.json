@@ -1,12 +1,22 @@
 {
   "name": "@universal-agent/acp-extension-core",
-  "version": "0.2.0",
+  "version": "0.1.0",
+  "description": "Core ACP extension protocol contracts and helpers for Universal Agent SDK",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sixdjango/universal-agent-sdk.git",
+    "directory": "packages/acp-extension-core"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
   },
