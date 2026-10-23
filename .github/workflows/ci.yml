@@ -30,7 +30,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile=false
+        run: pnpm install --frozen-lockfile
 
       - name: Build all packages & adapters
         run: pnpm build
@@ -52,7 +52,7 @@ jobs:
           fi
 
       - name: Typecheck workspace
-        run: pnpm typecheck
+        run: pnpm -r run typecheck
 
       - name: Run unit tests
         run: pnpm test

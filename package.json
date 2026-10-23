@@ -5,10 +5,11 @@
   "description": "Standalone Universal Agent Client SDK and ACP adapters",
   "type": "module",
   "scripts": {
-    "prepare:adapters": "pnpm --filter @universal-agent/acp-extension-core build && pnpm --filter './packages/adapters/*' build",
+    "prepare:adapters": "pnpm --filter @universal-agent/acp-extension-core build && pnpm --filter \"./packages/adapters/*\" build",
     "build": "pnpm run prepare:adapters && pnpm --filter @universal-agent/client build",
     "typecheck": "pnpm run prepare:adapters && pnpm -r run typecheck",
-    "test": "pnpm -r run test",
+    "test": "pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client run test",
+    "test:all": "pnpm -r run test",
     "clean": "pnpm -r run clean",
     "release:version": "node scripts/sync-version.mjs",
     "release:publish": "pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client publish --access public --no-git-checks"
