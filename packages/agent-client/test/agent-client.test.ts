@@ -13,7 +13,7 @@ describe('AgentClient & startAgentSession end-to-end protocol invariants', () =>
 
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 

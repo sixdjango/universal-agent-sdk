@@ -497,7 +497,12 @@ async function startLocalAcpProtocol<T extends object>(
         return;
       }
       try {
-        fs.rmSync(env.CODEX_HOME, { recursive: true, force: true });
+        fs.rmSync(env.CODEX_HOME, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 100,
+        });
       } catch {
         // ignore
       }
@@ -703,6 +708,12 @@ export async function shutdownLocalAcpAgent(options: ShutdownLocalAcpAgentOption
   }
 
   try {
+    options.agentProcess.stdin?.end();
+  } catch {
+    // ignore
+  }
+
+  try {
     await terminateAcpProcessTree(options.agentProcess, {
       logger: options.logger,
       sessionLabel: options.sessionLabel,
@@ -713,6 +724,14 @@ export async function shutdownLocalAcpAgent(options: ShutdownLocalAcpAgentOption
     options.logger.warn(
       `[${options.sessionLabel}] ACP agent process could not be terminated: ${formatErrorMessage(error)}`
     );
+  } finally {
+    try {
+      options.agentProcess.stdin?.destroy();
+      options.agentProcess.stdout?.destroy();
+      options.agentProcess.stderr?.destroy();
+    } catch {
+      // ignore
+    }
   }
 }
 

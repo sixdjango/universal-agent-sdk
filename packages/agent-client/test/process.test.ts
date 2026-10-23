@@ -22,7 +22,7 @@ describe('process primitives & invariants', () => {
 
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -83,23 +83,27 @@ describe('process primitives & invariants', () => {
     monitor.dispose();
   });
 
-  it('spawns a process group and terminates the entire child tree cleanly', async () => {
-    const handle = startProcess({
-      command: process.execPath,
-      args: ['-e', 'setInterval(() => {}, 1000)'],
-      options: { stdio: 'ignore' },
-      processGroup: true,
-    });
+  it(
+    'spawns a process group and terminates the entire child tree cleanly',
+    async () => {
+      const handle = startProcess({
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+        options: { stdio: 'ignore' },
+        processGroup: true,
+      });
 
-    expect(typeof handle.child.pid).toBe('number');
-    await terminateChildTree(handle.child, {
-      graceMs: 200,
-      killWaitMs: 1000,
-      processGroup: true,
-    });
-    const exit = await handle.exited;
-    expect(exit.code !== null || exit.signal !== null).toBe(true);
-  });
+      expect(typeof handle.child.pid).toBe('number');
+      await terminateChildTree(handle.child, {
+        graceMs: process.platform === 'win32' ? 0 : 200,
+        killWaitMs: 5000,
+        processGroup: true,
+      });
+      const exit = await handle.exited;
+      expect(exit.code !== null || exit.signal !== null).toBe(true);
+    },
+    20_000
+  );
 
   it('bypasses cmd.exe on Windows for DeepSeek Harness by resolving npx-cli.js', () => {
     const fakeNodeBin = mkdtempSync(join(tmpdir(), 'ua-win-npx-'));

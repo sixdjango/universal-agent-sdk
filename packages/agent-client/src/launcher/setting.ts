@@ -357,10 +357,8 @@ async function resolveRegistryAgentProcessLaunch(
     // Check explicit executablePath or locally installed binary first
     if (input.executablePath?.trim() || platformEntry) {
       const cmdBasename = platformEntry ? basename(platformEntry.cmd) : agent.id;
-      const candidates =
-        cmdBasename.endsWith('.par')
-          ? [cmdBasename, cmdBasename.slice(0, -4)]
-          : [cmdBasename];
+      const stripped = cmdBasename.replace(/\.(par|exe|cmd|bat)$/i, '');
+      const candidates = Array.from(new Set([cmdBasename, stripped, `${stripped}.par`]));
       const detected = await detectCommandExecutable(candidates, execDetectOptions);
       if (detected.found && detected.resolvedPath) {
         return {
