@@ -5,8 +5,9 @@ import {
   type ChiefDecision,
   type ChiefPolicy,
   type CompiledWorkflowPlan,
+  type ContextManifest,
 } from '@universal-agent/workflow-contract';
-import type { AgentAdapter, PinnedAgent, WorkflowRunState } from '../ports';
+import type { AgentAdapter, PinnedAgent, ScopedArtifactReader, WorkflowRunState } from '../ports';
 import type { ChiefTrigger } from './triggers';
 
 export interface ChiefReviewInput {
@@ -18,9 +19,16 @@ export interface ChiefReviewInput {
   readonly chiefAgent?: PinnedAgent;
   /** Adapter selected for `chiefAgent` (or the default executor). */
   readonly adapter: AgentAdapter;
-  /** Command kinds permitted by `policy.maxLevel`. */
+  /** Command kinds permitted by both `policy.maxLevel` and the host's allowlist. */
   readonly allowedCommands: readonly ChiefCommand['kind'][];
+  /** Runtime-scoped, paginated diagnostics. Does not expose artifact writes or other runs. */
+  readonly context?: ChiefReviewContext;
   readonly signal?: AbortSignal;
+}
+
+export interface ChiefReviewContext {
+  readonly manifest: ContextManifest;
+  readonly artifactReader: ScopedArtifactReader;
 }
 
 /**
@@ -33,8 +41,9 @@ export interface ChiefSupervisor {
   review(input: ChiefReviewInput): Promise<ChiefDecision>;
 }
 
-export function allowedChiefCommands(policy: ChiefPolicy): ChiefCommand['kind'][] {
+export function allowedChiefCommands(policy: ChiefPolicy, hostAllowedCommands?: readonly ChiefCommand['kind'][]): ChiefCommand['kind'][] {
   return (Object.keys(CHIEF_COMMAND_LEVEL) as ChiefCommand['kind'][]).filter(
     (kind) => CHIEF_LEVEL_RANK[CHIEF_COMMAND_LEVEL[kind]] <= CHIEF_LEVEL_RANK[policy.maxLevel]
+      && (hostAllowedCommands === undefined || hostAllowedCommands.includes(kind))
   );
 }

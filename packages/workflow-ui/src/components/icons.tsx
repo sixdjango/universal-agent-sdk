@@ -43,6 +43,13 @@ export const GateIcon = () => (
     <path d="M8 6.4V8l1 1" />
   </Svg>
 );
+export const SubflowIcon = () => (
+  <Svg>
+    <rect x="2" y="2.5" width="12" height="11" rx="2" />
+    <rect x="5" y="6" width="6" height="4.5" rx="1" />
+    <path d="M2 5h12" />
+  </Svg>
+);
 export const LoopIcon = () => (
   <Svg>
     <path d="M12.5 6.2A4.8 4.8 0 0 0 3.6 5.4M3.5 9.8a4.8 4.8 0 0 0 8.9.8" />

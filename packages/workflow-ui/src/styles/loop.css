@@ -107,25 +107,55 @@
 
 .loop-edge {
   fill: none;
-  stroke: var(--warn-border);
-  stroke-width: 1.4;
-  stroke-dasharray: 5 5;
+  stroke: var(--warn);
+  stroke-width: 1.6;
+  stroke-dasharray: 6 4;
+  opacity: 0.75;
 }
 
-.loop-edge[data-tone='delivered'] {
+/* Entering: after the deciding step's card appears, the way back draws from it to where the
+   round starts, then its arrow and label fade in. */
+.loop-edge-group {
+  --loop-enter: calc(var(--order, 0) * 90ms + 0.35s);
+}
+
+.loop-edge-draw {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 12;
+  animation: draw 0.9s var(--ease) both;
+  animation-delay: var(--loop-enter);
+}
+
+.loop-comet {
   stroke: var(--warn);
+  filter: drop-shadow(0 0 4px var(--warn-border));
+}
+
+.loop-edge[data-selected='true'] {
+  stroke: var(--warn);
+  stroke-width: 2.4;
+  opacity: 1;
+}
+
+.loop-edge[data-tone='delivered'],
+.loop-edge[data-tone='flowing'] {
   stroke-dasharray: none;
+  opacity: 1;
 }
 
 .loop-edge-arrow {
   fill: none;
-  stroke: var(--warn-border);
+  stroke: var(--warn);
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
+  animation: fade-in 0.45s var(--ease) both;
+  animation-delay: calc(var(--loop-enter) + 0.75s);
 }
 
-.loop-edge-arrow[data-tone='delivered'] {
+.loop-edge-arrow[data-tone='delivered'],
+.loop-edge-arrow[data-tone='flowing'] {
   stroke: var(--warn);
 }
 
@@ -139,6 +169,8 @@
   white-space: nowrap;
   color: var(--warn);
   pointer-events: none;
+  animation: fade-in 0.5s var(--ease) both;
+  animation-delay: calc(var(--order, 0) * 90ms + 1.1s);
 }
 
 .scope-banner {
@@ -147,24 +179,103 @@
   top: 136px;
   left: 50%;
   z-index: 5;
-  width: min(560px, calc(100% - 48px));
-  padding: 10px 14px;
+  max-width: min(560px, calc(100% - 48px));
+  padding: 5px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--card) 92%, transparent);
-  font-size: 12.5px;
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 12px;
   line-height: 1.5;
   color: var(--text-2);
   transform: translateX(-50%);
-  pointer-events: none;
+  cursor: default;
 }
 
 .scope-banner[data-kind='loop'] {
   border-color: var(--warn-border);
 }
 
+/* The explanation stays out of the way until asked for. */
+.scope-banner-text {
+  display: none;
+  margin-top: 4px;
+}
+
+.scope-banner:hover,
+.scope-banner:focus-visible {
+  border-radius: 12px;
+  outline: none;
+}
+
+.scope-banner:hover .scope-banner-text,
+.scope-banner:focus-visible .scope-banner-text {
+  display: block;
+}
+
 .scope-banner-title {
   margin-bottom: 2px;
   font-weight: 500;
   color: var(--text);
+}
+
+/* A loop's rounds, on the label of its way back. */
+.loop-edge-rounds {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: 8px;
+  pointer-events: auto;
+}
+
+.loop-edge-round {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--card);
+  font: 11px var(--font);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.loop-edge-round[data-verdict='NEEDS_FIX'] {
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+.loop-edge-round[data-verdict='PASS'] {
+  border-color: transparent;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.loop-edge-round[data-verdict='FAIL'],
+.loop-edge-round[data-verdict='BLOCKED'] {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.loop-edge-round[aria-pressed='true'] {
+  outline: 2px solid var(--active);
+  outline-offset: 1px;
+}
+
+.card .icon-btn.loop-expand {
+  width: auto;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--warn);
+  opacity: 1;
+}
+
+.loop-mark {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  font-size: 10.5px;
+  line-height: 16px;
+  color: var(--warn);
+  white-space: nowrap;
+  cursor: help;
 }

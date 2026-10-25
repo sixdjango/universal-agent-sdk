@@ -96,7 +96,8 @@ export interface ContextManifest {
   readonly totalInlineBytes: number;
   readonly initialBudgetBytes: number;
   readonly pageReadBytes: number;
-  readonly stageReadQuotaBytes: number;
+  /** Cumulative artifact read quota for this attempt; absent means unlimited. */
+  readonly stageReadQuotaBytes?: number;
   readonly createdAtMs: number;
 }
 
@@ -108,6 +109,40 @@ export interface ArtifactReadReceipt {
   readonly readBytes: number;
   readonly section?: string;
   readonly timestampMs: number;
+}
+
+export interface ThinkingStepPill {
+  readonly label: string;
+  /** Short badge such as 'TS', 'JS', 'JSON', 'MD', 'SH', 'ART', 'IN'. */
+  readonly badge?: string;
+  readonly path?: string;
+}
+
+export interface ThinkingStepSubItem {
+  readonly id: string;
+  readonly text: string;
+  readonly status?: 'running' | 'done' | 'failed';
+}
+
+export interface ThinkingStep {
+  readonly id: string;
+  readonly kind: 'think' | 'search' | 'read' | 'edit' | 'execute' | 'plan' | 'draft' | 'done' | 'fail';
+  readonly status: 'running' | 'done' | 'failed';
+  readonly label: string;
+  readonly detail?: string;
+  readonly pills?: readonly ThinkingStepPill[];
+  readonly subItems?: readonly ThinkingStepSubItem[];
+  readonly startedAtMs?: number;
+  readonly completedAtMs?: number;
+}
+
+export interface LiveAttemptProgress {
+  readonly runId: string;
+  readonly scopeKey: string;
+  readonly nodeId: string;
+  readonly attemptId: string;
+  readonly startedAtMs: number;
+  readonly steps: readonly ThinkingStep[];
 }
 
 export interface WaitRequest {
@@ -209,6 +244,8 @@ export type WorkflowEvent =
       readonly rationale: string;
       readonly applied: readonly ChiefCommand[];
       readonly rejected: readonly { readonly command: ChiefCommand; readonly reason: string }[];
+      readonly durationMs?: number;
+      readonly steps?: readonly ThinkingStep[];
       readonly timestampMs: number;
     }
   | {

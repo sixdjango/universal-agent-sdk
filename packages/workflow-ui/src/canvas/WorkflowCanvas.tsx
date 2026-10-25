@@ -17,6 +17,8 @@ import type { CanvasLayout } from '../types';
 import { Menu } from '../components/Menu';
 import type { CanvasModel } from '../model/canvas';
 import { type CanvasConnection, isPlausibleConnection, type NewNodeKind } from '../model/editing';
+import { INPUTS_NODE_ID, OUTPUTS_NODE_ID } from '../model/scope';
+import { layeredLayout } from '../model/layout';
 import { FlowEdge } from './FlowEdge';
 import { LoopEdge } from './LoopEdge';
 import { NodeCard } from './NodeCard';
@@ -24,11 +26,30 @@ import { NodeCard } from './NodeCard';
 const nodeTypes = { card: NodeCard };
 const edgeTypes = { flow: FlowEdge, loop: LoopEdge };
 
-function ZoomControl() {
+const AUTO_LAYOUT_MS = 380;
+/** Auto layout wraps a long flow so each row fits the view at this zoom or larger. */
+const WRAP_ZOOM = 0.75;
+
+function AutoLayoutIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="1.5" y="2" width="4.5" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="1.5" y="10" width="4.5" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="10" y="6" width="4.5" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6 4h1.5a1.5 1.5 0 0 1 1.5 1.5V8m-3 4h1.5A1.5 1.5 0 0 0 9 10.5V8m0 0h1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
+/** Zoom out / level / in, plus "auto layout" (tidies the graph using the cards' real sizes). */
+function ZoomControl({ onAutoLayout }: { onAutoLayout(): void }) {
   const { zoomIn, zoomOut } = useReactFlow();
   const zoom = useStore((s) => s.transform[2]);
   return (
     <div className="zoom">
+      <button type="button" className="zoom-layout" aria-label="Auto layout" title="Auto layout" onClick={onAutoLayout}>
+        <AutoLayoutIcon />
+      </button>
       <button type="button" aria-label="Zoom out" onClick={() => void zoomOut({ duration: 200 })}>
         −
       </button>
@@ -116,8 +137,7 @@ const NODE_CHOICES: { kind: NewNodeKind; title: string; desc: string }[] = [
   { kind: 'agent', title: 'Agent task', desc: 'An agent does the work; can also review with a verdict' },
   { kind: 'script', title: 'Script', desc: 'A command whose exit code decides pass or fix' },
   { kind: 'gate', title: 'Human decision', desc: 'Pause until someone picks an option' },
-  { kind: 'loop', title: 'Loop', desc: 'Repeat steps until a review passes (starts with author + reviewer)' },
-  { kind: 'parallel', title: 'Parallel', desc: 'Run steps once per item of a list, then collect the results' },
+  { kind: 'subflow', title: 'Sub-flow', desc: 'Run another saved workflow as one step' },
 ];
 
 /**
@@ -181,6 +201,7 @@ function Canvas(props: {
   model: CanvasModel;
   fitKey: string;
   editable: boolean;
+  theme?: 'dark' | 'light';
   onLayoutChange(layout: CanvasLayout): void;
   onBackgroundClick(): void;
   onConnect(connection: CanvasConnection): void;
@@ -217,6 +238,44 @@ function Canvas(props: {
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const { onLayoutChange } = props;
+  const { getNodes, fitView } = useReactFlow();
+  const viewWidth = useStore((s) => s.width);
+  /** Lays the current graph out again from the cards' measured sizes, animated, and saves it. */
+  const autoLayout = useCallback(() => {
+    const measured = getNodes();
+    const positions = layeredLayout({
+      nodes: measured.map((n) => ({
+        id: n.id,
+        width: n.measured?.width ?? n.width ?? 280,
+        height: n.measured?.height ?? n.height ?? 160,
+      })),
+      edges: props.model.edges.filter((e) => e.type !== 'loop'),
+      first: INPUTS_NODE_ID,
+      last: OUTPUTS_NODE_ID,
+      ...(viewWidth ? { maxRowWidth: Math.max(1200, viewWidth / WRAP_ZOOM) } : {}),
+    });
+    dragged.current = { ...positions };
+    onLayoutChange(positions);
+    // Move cards (and with them their edges) frame by frame to the new places.
+    const from = new Map(measured.map((n) => [n.id, n.position]));
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const started = performance.now();
+    const frame = (now: number) => {
+      const t = reduced ? 1 : Math.min(1, (now - started) / AUTO_LAYOUT_MS);
+      const ease = 1 - (1 - t) ** 3;
+      setNodes((current) =>
+        current.map((n) => {
+          const to = positions[n.id];
+          const start = from.get(n.id);
+          if (!to || !start) return n;
+          return { ...n, position: { x: start.x + (to.x - start.x) * ease, y: start.y + (to.y - start.y) * ease } };
+        })
+      );
+      if (t < 1) requestAnimationFrame(frame);
+      else void fitView({ duration: 300, padding: 0.12, maxZoom: 1 });
+    };
+    requestAnimationFrame(frame);
+  }, [getNodes, fitView, props.model.edges, onLayoutChange, viewWidth]);
   const onNodeDragStop = useCallback(
     (_event: unknown, _node: Node, draggedNodes: Node[]) => {
       for (const n of draggedNodes) dragged.current[n.id] = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
@@ -249,24 +308,31 @@ function Canvas(props: {
         })
       }
       connectionRadius={28}
-      onNodeClick={props.editable ? (_e, node) => props.onNodeClick(node.id) : undefined}
-      onEdgeClick={props.editable ? (_e, edge) => edge.type !== 'loop' && props.onEdgeClick(edge.id) : undefined}
+      // Design view: opens the inspector; run view: opens the step's execution details.
+      onNodeClick={(_e, node) => props.onNodeClick(node.id)}
+      onEdgeClick={props.editable ? (_e, edge) => !edge.id.startsWith('$') && props.onEdgeClick(edge.id) : undefined}
       edgesFocusable={false}
       elementsSelectable={false}
       deleteKeyCode={null}
       minZoom={0.3}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}
-      colorMode="dark"
+      colorMode={props.theme ?? 'dark'}
     >
       <Background variant={BackgroundVariant.Dots} gap={18} size={1.1} color="var(--dot)" />
+      <div className="connection-legend" aria-label="Connection guide">
+        <span><i className="legend-execution" aria-hidden="true" />Flow · when to run</span>
+        <span><i className="legend-parameter" aria-hidden="true" />Parameters · shown for the selected step</span>
+        <small>Click a step to see what it passes and receives. Hover a line for details.</small>
+      </div>
       {props.model.banner && (
-        <div className="scope-banner" data-kind={props.model.banner.kind}>
-          <div className="scope-banner-title">{props.model.banner.title}</div>
+        // A small label; the full explanation shows on hover / focus.
+        <div className="scope-banner" data-kind={props.model.banner.kind} tabIndex={0}>
+          <div className="scope-banner-title">ⓘ {props.model.banner.title}</div>
           <div className="scope-banner-text">{props.model.banner.text}</div>
         </div>
       )}
-      <ZoomControl />
+      <ZoomControl onAutoLayout={autoLayout} />
       {props.editable && <AddNodeButton onAdd={props.onAddNode} />}
       <FitOnChange fitKey={props.fitKey} />
       <FollowActive nodeId={activeNodeId} />

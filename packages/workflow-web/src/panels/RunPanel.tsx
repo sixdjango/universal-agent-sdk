@@ -2,6 +2,12 @@ import type { WorkflowDefinition } from '@universal-agent/workflow-contract';
 import { listWorkspaceSlots, type WorkspaceRecord } from '@universal-agent/workflow-ui';
 import { useState } from 'react';
 
+function extractExampleValue(description: string | undefined): string | undefined {
+  if (!description) return undefined;
+  const match = description.match(/e\.g\.\s*(\[[\s\S]*\]|\{[\s\S]*\})/i);
+  return match?.[1]?.trim();
+}
+
 /** Start a run: the workflow's inputs plus a workspace for each slot. */
 export function RunPanel(props: {
   definition: WorkflowDefinition;
@@ -13,7 +19,14 @@ export function RunPanel(props: {
   onStart(inputs: Record<string, unknown>, workspaces: Record<string, string>): void;
 }) {
   const { definition } = props;
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const port of definition.inputs) {
+      const example = extractExampleValue(port.description);
+      if (example) initial[port.name] = example;
+    }
+    return initial;
+  });
   const slots = listWorkspaceSlots(definition);
   const implicit = definition.workspaces.length === 0;
   const [chosen, setChosen] = useState<Record<string, string>>(() => {
@@ -40,7 +53,15 @@ export function RunPanel(props: {
         try {
           inputs[port.name] = JSON.parse(raw);
         } catch {
-          inputs[port.name] = raw;
+          if (port.type === 'json') {
+            const parts = raw
+              .split(/[\r\n,，;；]+/)
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0);
+            inputs[port.name] = parts.length > 1 ? parts : raw;
+          } else {
+            inputs[port.name] = raw;
+          }
         }
       }
     }
@@ -85,9 +106,11 @@ export function RunPanel(props: {
           <span>
             {port.name}
             {port.required ? '' : ' (optional)'} · {port.type}
+            {port.description ? ` — ${port.description}` : ''}
           </span>
           <textarea
             rows={port.type === 'string' || port.type === 'artifact' ? 3 : 2}
+            placeholder={port.description}
             value={values[port.name] ?? ''}
             onChange={(e) => setValues((v) => ({ ...v, [port.name]: e.target.value }))}
             onKeyDown={(e) => {

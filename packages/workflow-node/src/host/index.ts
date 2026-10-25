@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './conversations';
 export * from './migrations';
 export * as hostSchema from './schema';
 export * from './run-service';

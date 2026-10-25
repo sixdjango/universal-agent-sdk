@@ -22,7 +22,7 @@
   border: 1px solid var(--border-strong);
   border-radius: 14px;
   background: var(--card-raised);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-dock);
 }
 
 .chief-composer textarea {
@@ -125,7 +125,7 @@
   border: 1px solid var(--border-strong);
   border-radius: 14px;
   background: var(--card-raised);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-dock);
   animation: pop-in 0.18s var(--ease) both;
 }
 
@@ -186,7 +186,7 @@
 }
 
 .from-user .chief-bubble {
-  background: #2c2c31;
+  background: var(--user-bubble);
 }
 
 .chief-label {

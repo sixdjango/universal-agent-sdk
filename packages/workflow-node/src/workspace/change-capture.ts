@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { copyFile, rm } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { open, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { findGitRoot } from './git-worktree';
 
@@ -34,6 +36,28 @@ export async function git(root: string, args: readonly string[], env?: NodeJS.Pr
   return stdout;
 }
 
+async function copyIndex(sourcePath: string, targetPath: string): Promise<void> {
+  const source = await open(sourcePath, 'r').catch((error: NodeJS.ErrnoException) => {
+    // An unborn repository need not have an index yet; git add will create ours.
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!source) return;
+  try {
+    // Read metadata and bytes from the same open file: Git may atomically replace
+    // the index while we copy it. Never pair old contents with a newer timestamp.
+    const { mtimeNs } = await source.stat({ bigint: true });
+    await pipeline(source.createReadStream(), createWriteStream(targetPath, { flags: 'wx' }));
+    // Git rechecks content when a file's mtime >= the index's mtime (racy Git).
+    // A fresh copy timestamp hides equal-size edits whose cached stat still matches.
+    // Round down to seconds so timestamp precision loss cannot advance this bound.
+    const seconds = Number(mtimeNs / 1_000_000_000n);
+    await utimes(targetPath, seconds, seconds);
+  } finally {
+    await source.close();
+  }
+}
+
 /**
  * Records the working tree of `dir`'s repository as a git tree, through a temporary index
  * so the user's staging area is never touched. Returns null outside git repositories.
@@ -46,9 +70,9 @@ export async function snapshotWorkingTree(
   if (!root) return null;
   const tempIndex = join(tmpdir(), `ua-index-${randomBytes(6).toString('hex')}`);
   try {
-    // Starting from the real index lets `git add` skip unchanged files.
+    // Keep tracked/ignored entries and the user's staging state only in our copy.
     const indexPath = (await git(root, ['rev-parse', '--git-path', 'index'])).trim();
-    await copyFile(isAbsolute(indexPath) ? indexPath : join(root, indexPath), tempIndex).catch(() => undefined);
+    await copyIndex(isAbsolute(indexPath) ? indexPath : join(root, indexPath), tempIndex);
     const env = { GIT_INDEX_FILE: tempIndex };
     await git(root, ['add', '--all', '--', '.'], env);
     if (options.exclude?.length) {

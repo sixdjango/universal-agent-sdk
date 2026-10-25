@@ -121,11 +121,25 @@ export function createInitialScopeState(
 export function evaluateEdgeCondition(
   condition: EdgeCondition | undefined,
   defaultSourceNodeId: string,
-  scopeState: Pick<GraphScopeState, 'nodes'>
+  scopeState: Pick<GraphScopeState, 'nodes'>,
+  /** Edges leaving the same node; `otherwise` holds when none of their conditions does. */
+  siblings: readonly ControlEdge[] = []
 ): boolean {
   if (!condition || condition.kind === 'always') {
     return true;
   }
+  if (condition.kind === 'otherwise') {
+    return !siblings.some(
+      (edge) =>
+        edge.when &&
+        edge.when.kind !== 'always' &&
+        edge.when.kind !== 'otherwise' &&
+        !edge.loop &&
+        evaluateEdgeCondition(edge.when, defaultSourceNodeId, scopeState)
+    );
+  }
+  if (condition.kind === 'all') return condition.conditions.every((c) => evaluateEdgeCondition(c, defaultSourceNodeId, scopeState));
+  if (condition.kind === 'any') return condition.conditions.some((c) => evaluateEdgeCondition(c, defaultSourceNodeId, scopeState));
   const sourceId = condition.sourceNodeId ?? defaultSourceNodeId;
   const sourceNode = scopeState.nodes[sourceId];
   if (!sourceNode) return false;
@@ -146,6 +160,33 @@ export function evaluateEdgeCondition(
       const portRec = sourceNode.outputs[condition.port];
       return Boolean(portRec?.value);
     }
+    case 'port_compare': {
+      const raw = sourceNode.outputs[condition.port]?.value;
+      const value = condition.measure === 'length' ? lengthOf(raw) : raw;
+      return compareValues(value, condition.op, condition.value);
+    }
+  }
+}
+
+/** Length of a list or text; undefined for anything else. */
+function lengthOf(value: unknown): number | undefined {
+  return Array.isArray(value) || typeof value === 'string' ? value.length : undefined;
+}
+
+/** `==` / `!=` compare anything; ordering holds only between two numbers. */
+function compareValues(left: unknown, op: '==' | '!=' | '>' | '>=' | '<' | '<=', right: string | number | boolean | null): boolean {
+  if (op === '==') return left === right;
+  if (op === '!=') return left !== right;
+  if (typeof left !== 'number' || typeof right !== 'number' || Number.isNaN(left)) return false;
+  switch (op) {
+    case '>':
+      return left > right;
+    case '>=':
+      return left >= right;
+    case '<':
+      return left < right;
+    case '<=':
+      return left <= right;
   }
 }
 
@@ -173,7 +214,10 @@ function findRunnableNodeIds(
       }) &&
         inEdges.some((e) => {
           const s = nodes[e.fromNodeId]?.status;
-          return s === 'SUCCEEDED' && evaluateEdgeCondition(e.when, e.fromNodeId, { nodes });
+          return (
+            s === 'SUCCEEDED' &&
+            evaluateEdgeCondition(e.when, e.fromNodeId, { nodes }, compiledScope.outgoingControlEdges[e.fromNodeId])
+          );
         }));
     if (!controlReady) continue;
 
@@ -223,10 +267,12 @@ export function reduceScopeTransitions(
     const anyEdgeActivated = inEdges.some((edge) => {
       const pred = updatedNodes[edge.fromNodeId];
       if (!pred || pred.status !== 'SUCCEEDED') return false;
-      return evaluateEdgeCondition(edge.when, edge.fromNodeId, {
-        ...scopeState,
-        nodes: updatedNodes,
-      });
+      return evaluateEdgeCondition(
+        edge.when,
+        edge.fromNodeId,
+        { ...scopeState, nodes: updatedNodes },
+        compiledScope.outgoingControlEdges[edge.fromNodeId]
+      );
     });
 
     // A required input whose producer was skipped can never arrive, so the consumer is dead too.
@@ -325,9 +371,8 @@ export function computeScopeReadyNodeIds(
 }
 
 /**
- * Marks `targetNodeId` as `PENDING` and all reachable downstream nodes in `scopeKey`
- * as `STALE` (along with marking their `AssessmentRecord`s as `stale: true`),
- * while leaving unrelated parallel branches untouched.
+ * Reopens the target and its enclosing containers, invalidating all downstream
+ * consumers, assessments, outputs and pending questions. Preserves unrelated branches.
  */
 export function invalidateSubgraphForRerun(
   plan: CompiledWorkflowPlan,
@@ -356,67 +401,86 @@ export function invalidateSubgraphForRerun(
     includeStart: false,
   });
 
-  const updatedNodes: Record<string, NodeRuntimeState> = { ...scopeState.nodes };
-  updatedNodes[targetNodeId] = {
-    ...updatedNodes[targetNodeId]!,
-    status: 'PENDING',
-    error: undefined,
-  };
-
   const events: WorkflowEvent[] = [];
-  const staleAssessmentIds = new Set<string>();
-
-  for (const downId of downstreamIds) {
-    const prev = updatedNodes[downId]!;
-    if (prev.latestAssessmentId) {
-      staleAssessmentIds.add(prev.latestAssessmentId);
-    }
-    updatedNodes[downId] = {
-      ...prev,
-      status: 'STALE',
-      latestVerdict: undefined,
-      error: undefined,
-    };
-    events.push({
-      type: 'node.invalidated',
-      runId: runState.runId,
-      scopeKey,
-      nodeId: downId,
-      reason: `upstream_rerun:${targetNodeId}`,
-      timestampMs,
-    });
-  }
-
   const updatedAssessments = { ...runState.assessments };
-  for (const aId of staleAssessmentIds) {
-    if (updatedAssessments[aId]) {
-      updatedAssessments[aId] = {
-        ...updatedAssessments[aId]!,
-        stale: true,
-      };
-    }
-  }
-
-  const updatedScopes: Record<string, GraphScopeState> = reviveAncestorScopes(
-    {
-      ...runState.scopes,
-      [scopeKey]: {
-        ...scopeState,
-        status: 'RUNNING',
-        nodes: updatedNodes,
-      },
-    },
-    scopeKey
-  );
-
-  // If targetNodeId or any downstream node is a loop/parallel container, clear its old child scopes
-  for (const resetNodeId of [targetNodeId, ...downstreamIds]) {
-    const prefix = `${scopeKey}/${resetNodeId}`;
-    for (const key of Object.keys(updatedScopes)) {
-      if (key === prefix || key.startsWith(`${prefix}[`) || key.startsWith(`${prefix}:`)) {
-        delete updatedScopes[key];
+  const updatedScopes = { ...runState.scopes };
+  const waitRequests = { ...runState.waitRequests };
+  const invalidateEvidence = (key: string, nodeId: string) => {
+    for (const assessment of Object.values(updatedAssessments)) {
+      const attempt = runState.attempts[assessment.attemptId];
+      if (attempt?.scopeKey === key && attempt.nodeId === nodeId) {
+        updatedAssessments[assessment.assessmentId] = { ...assessment, stale: true };
       }
     }
+    for (const wait of Object.values(waitRequests)) {
+      if (wait.scopeKey === key && wait.nodeId === nodeId && wait.status === 'PENDING') {
+        waitRequests[wait.requestId] = { ...wait, status: 'CANCELLED' };
+      }
+    }
+  };
+  const removeScopeTree = (root: string) => {
+    for (const key of Object.keys(updatedScopes)) {
+      if (key !== root && !key.startsWith(`${root}/`)) continue;
+      for (const node of Object.values(updatedScopes[key]!.nodes)) invalidateEvidence(key, node.nodeId);
+      delete updatedScopes[key];
+    }
+  };
+
+  // A repaired nested output also invalidates consumers of its enclosing containers.
+  // Preserve sibling parallel items, and discard only later loop rounds that used old feedback.
+  let currentKey = scopeKey;
+  let currentNodeId = targetNodeId;
+  let preserveChildren = false;
+  while (true) {
+    const current = updatedScopes[currentKey]!;
+    const compiled = resolveCompiledScopeByKey(plan, currentKey);
+    const affected = [currentNodeId, ...computeDownstreamSubgraph(compiled, [currentNodeId], {
+      mode: 'control_and_data', includeStart: false,
+    })];
+    const nodes = { ...current.nodes };
+    for (const nodeId of affected) {
+      invalidateEvidence(currentKey, nodeId);
+      nodes[nodeId] = {
+        ...nodes[nodeId]!,
+        status: nodeId === currentNodeId ? 'PENDING' : 'STALE',
+        outputs: {},
+        parallelItems: undefined,
+        retryCount: 0,
+        latestVerdict: undefined,
+        latestAssessmentId: undefined,
+        activeWaitRequestId: undefined,
+        error: undefined,
+      };
+      events.push({
+        type: 'node.invalidated', runId: runState.runId, scopeKey: currentKey, nodeId,
+        reason: `upstream_rerun:${targetNodeId}`, timestampMs,
+      });
+      if (preserveChildren && nodeId === currentNodeId) continue;
+      const prefix = `${currentKey}/${nodeId}`;
+      for (const key of Object.keys(updatedScopes)) {
+        if (key.startsWith(`${prefix}[`) || key.startsWith(`${prefix}:`)) removeScopeTree(key);
+      }
+    }
+    // Rebuild exported ports so a failed repair cannot leave old success outputs visible.
+    updatedScopes[currentKey] = {
+      ...reduceScopeTransitions(compiled, { ...current, nodes, outputs: {} }), status: 'RUNNING',
+    };
+    if (currentKey === '$root') break;
+    const slash = currentKey.lastIndexOf('/');
+    const parentKey = currentKey.slice(0, slash);
+    const segment = currentKey.slice(slash + 1);
+    const containerId = segment.split(/[:[]/)[0]!;
+    const roundPrefix = `${containerId}:round_`;
+    if (segment.startsWith(roundPrefix)) {
+      const round = Number(segment.slice(roundPrefix.length));
+      const prefix = `${parentKey}/${roundPrefix}`;
+      for (const key of Object.keys(updatedScopes)) {
+        if (key.startsWith(prefix) && Number(key.slice(prefix.length).split('/')[0]) > round) removeScopeTree(key);
+      }
+    }
+    currentKey = parentKey;
+    currentNodeId = containerId;
+    preserveChildren = true;
   }
 
   return {
@@ -425,6 +489,8 @@ export function invalidateSubgraphForRerun(
       status: 'RUNNING',
       scopes: updatedScopes,
       assessments: updatedAssessments,
+      waitRequests,
+      outputs: Object.fromEntries(Object.entries(updatedScopes.$root!.outputs).map(([key, record]) => [key, record.value])),
       events: [...runState.events, ...events],
     },
     affectedNodeIds: [targetNodeId, ...downstreamIds],

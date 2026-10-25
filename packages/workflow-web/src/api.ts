@@ -4,6 +4,9 @@ import type {
   AgentListing,
   AgentRuntimeInfo,
   CanvasLayout,
+  ConversationReader,
+  NodeDataReader,
+  NodeDataRecord,
   WorkspaceIsolation,
   WorkspaceRecord,
 } from '@universal-agent/workflow-ui';
@@ -99,12 +102,39 @@ export const api = {
     }),
   messageChief: (runId: string, text: string) =>
     request<{ messageId: string }>(`/runs/${encodeURIComponent(runId)}/chief/messages`, { method: 'POST', json: { text } }),
-  rerun: (runId: string, nodeId: string) =>
-    request<void>(`/runs/${encodeURIComponent(runId)}/rerun`, { method: 'POST', json: { nodeId } }),
+  cancelRun: (runId: string) => request<void>(`/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
+  rerun: (runId: string, nodeId: string, scopeKey?: string) =>
+    request<void>(`/runs/${encodeURIComponent(runId)}/rerun`, { method: 'POST', json: { nodeId, ...(scopeKey ? { scopeKey } : {}) } }),
   readArtifact: (artifactId: string) =>
     request<{ meta: { mediaType: string; sizeBytes: number; summary?: string }; slice: { content: string; hasMore: boolean } }>(
       `/artifacts/${encodeURIComponent(artifactId)}`
     ),
+};
+
+const queryString = (values: Record<string, string | number | undefined>) =>
+  new URLSearchParams(Object.entries(values).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString();
+
+/** Read-only bridge. Scheduling, retry and permission decisions remain in Flow. */
+/** Loads what steps saved (`GET /api/runs/:id/data`). */
+export const nodeDataReader: NodeDataReader = {
+  list: (query, signal) =>
+    request<{ records: NodeDataRecord[] }>(
+      `/runs/${encodeURIComponent(query.runId)}/data?${queryString({
+        ...(query.nodeId ? { nodeId: query.nodeId } : {}),
+        ...(query.scopeKey ? { scopeKey: query.scopeKey } : {}),
+        ...(query.namespace ? { namespace: query.namespace } : {}),
+      })}`,
+      { signal }
+    ).then((r) => r.records),
+};
+
+export const conversationReader: ConversationReader = {
+  list: (target, page, signal) => request<{ conversations: Awaited<ReturnType<ConversationReader['list']>> }>(
+    `/runs/${encodeURIComponent(target.runId)}/conversations?${queryString({ nodeId: target.nodeId, scopeKey: target.scopeKey, ...page })}`, { signal },
+  ).then(result => result.conversations),
+  get: (id, signal) => request(`/conversations/${encodeURIComponent(id)}`, { signal }),
+  turns: (id, page, signal) => request(`/conversations/${encodeURIComponent(id)}/turns?${queryString({ ...page })}`, { signal }),
+  events: (id, page, signal) => request(`/conversations/${encodeURIComponent(id)}/events?${queryString({ ...page })}`, { signal }),
 };
 
 export type { WorkflowRunState };

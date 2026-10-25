@@ -137,6 +137,42 @@ describe('@universal-agent/workflow-node: SQLite RuntimeStore & ArtifactStore', 
     expect(delivery?.artifactId).toBe(done.scopes.$root!.nodes.draft!.outputs.notes!.artifactId);
   });
 
+  it('records a loop\'s way back, with its round limit, among the contract edges', async () => {
+    const { db } = openTempDb();
+    const definition = createWorkflowBuilder('sqlite-loop', 'SQLite loop')
+      .addAgent({ id: 'draft', name: 'Draft', role: 'author', goal: 'Draft', inputs: [], outputs: [] })
+      .addAgent({ id: 'review', name: 'Review', role: 'reviewer', goal: 'Review', producesAssessment: true, inputs: [], outputs: [] })
+      .connectControl('draft', 'review')
+      .buildDefinition();
+    definition.graph.controlEdges.push({
+      id: 'back',
+      fromNodeId: 'review',
+      toNodeId: 'draft',
+      when: { kind: 'verdict_is', verdict: 'NEEDS_FIX' },
+      loop: { maxRounds: 4, onExhausted: 'gate' },
+    });
+    const runtime = createWorkflowRuntime({
+      store: new SqliteRuntimeStore({ db }),
+      executor: {
+        async executeAgent() {
+          return { status: 'COMPLETED', outputs: {} };
+        },
+        async executeScript() {
+          throw new Error('unused');
+        },
+      },
+    });
+    await runtime.start({ runId: 'run-loop', definition, inputs: {} });
+
+    const edges = db.select().from(workflowSchema.definitionEdges).all();
+    expect(edges.find((e) => e.edgeId === 'back')).toMatchObject({
+      edgeKind: 'control',
+      condition: { kind: 'verdict_is', verdict: 'NEEDS_FIX' },
+      loop: { maxRounds: 4, onExhausted: 'gate' },
+    });
+    expect(edges.find((e) => e.edgeId === 'ctrl_draft_to_review')?.loop).toBeNull();
+  });
+
   it('fences stale coordinators and stale seqs across independent connections', async () => {
     const { db, paths } = openTempDb();
     const otherProcessDb = openWorkflowDatabase(paths.databasePath);

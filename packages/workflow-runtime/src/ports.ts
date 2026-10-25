@@ -1,3 +1,4 @@
+import type { NodeDataAccess } from './node-data';
 import type {
   AgentNode,
   AgentProfile,
@@ -7,13 +8,16 @@ import type {
   AssessmentRecord,
   AssessmentVerdict,
   ContextManifest,
+  LiveAttemptProgress,
   NodeExecutionStatus,
   RunWorkspaceBinding,
   ScriptNode,
   StagePhase,
+  ThinkingStep,
   WaitRequest,
   WorkflowDefinition,
   WorkflowEvent,
+  WorkspaceMergeCheck,
   WorkflowRunStatus,
 } from '@universal-agent/workflow-contract';
 
@@ -52,6 +56,8 @@ export class RevisionConflictError extends Error {
 export interface PortValueRecord {
   readonly value: unknown;
   readonly artifactId?: string;
+  /** Metadata for aggregated values, so a later per-item node retains artifact access. */
+  readonly items?: readonly (PortValueRecord | null)[];
 }
 
 export interface NodeRuntimeState {
@@ -64,6 +70,14 @@ export interface NodeRuntimeState {
   readonly latestAssessmentId?: string;
   readonly activeWaitRequestId?: string;
   readonly error?: string;
+  /** Ordered per-item results, including original artifact references and failed items. */
+  readonly parallelItems?: readonly {
+    readonly scopeKey: string;
+    readonly status: WorkflowRunStatus;
+    readonly outputs: Readonly<Record<string, PortValueRecord>>;
+    readonly error?: string;
+    readonly verdict?: AssessmentVerdict;
+  }[];
 }
 
 export interface GraphScopeState {
@@ -81,6 +95,9 @@ export interface GraphScopeState {
 
 export interface EffectReceipt {
   readonly attemptId: string;
+  /** Unified history of this actual executor call; retries have separate recordings. */
+  readonly conversationId?: string;
+  readonly conversationTurnId?: string;
   readonly sessionId?: string;
   readonly acpSessionId?: string;
   readonly agentType?: string;
@@ -93,6 +110,8 @@ export interface EffectReceipt {
   readonly totalCostUsd?: number;
   readonly exitCode?: number | null;
   readonly durationMs: number;
+  /** Thinking and tool-call steps captured during execution. */
+  readonly steps?: readonly ThinkingStep[];
 }
 
 /** An agent profile resolved once per run and reused for every later reference to the same ref. */
@@ -313,7 +332,8 @@ export interface ScopedArtifactReader {
     artifactId: string,
     options?: { offsetBytes?: number; maxBytes?: number; section?: string }
   ): Promise<ArtifactPageSlice>;
-  getRemainingQuotaBytes(): number;
+  /** Remaining cumulative read quota, or null when no quota is configured. */
+  getRemainingQuotaBytes(): number | null;
   getReceipts(): readonly ArtifactReadReceipt[];
 }
 
@@ -322,6 +342,9 @@ export interface AgentExecutionRequest {
   readonly scopeKey: string;
   readonly attemptId: string;
   readonly invocationId: string;
+  /** Existing scheduler counters, exposed only for execution correlation. */
+  readonly retryIndex?: number;
+  readonly roundIndex?: number;
   readonly node: AgentNode;
   /** Agent profile the node is delegated to; absent for legacy role-bound nodes. */
   readonly agent?: PinnedAgent;
@@ -329,6 +352,8 @@ export interface AgentExecutionRequest {
   readonly renderedPrompt: string;
   readonly inputs: Readonly<Record<string, unknown>>;
   readonly artifactReader: ScopedArtifactReader;
+  /** The step's intermediate data, bound to this attempt (see `NodeDataAccess`). */
+  readonly data?: NodeDataAccess;
   /** Directory bound to the node's slot; absent when the run left the slot unbound. */
   readonly workspace?: RunWorkspaceBinding;
   /** Slots listed in `node.readWorkspaces` that the run bound. */
@@ -344,6 +369,8 @@ export interface AgentExecutionRequest {
     readonly answer: string | Record<string, unknown>;
     readonly responderId: string;
   };
+  /** Live callback invoked as the agent streams thoughts, tool calls, or plans. */
+  readonly onProgress?: (steps: readonly ThinkingStep[]) => void;
   readonly signal?: AbortSignal;
 }
 
@@ -377,6 +404,8 @@ export interface ScriptExecutionRequest {
   readonly invocationId: string;
   readonly node: ScriptNode;
   readonly inputs: Readonly<Record<string, unknown>>;
+  /** The step's intermediate data, bound to this attempt (see `NodeDataAccess`). */
+  readonly data?: NodeDataAccess;
   /** Directory bound to the node's slot; `node.cwd` is relative to it. */
   readonly workspace?: RunWorkspaceBinding;
   /** `workspace` is a private copy the runtime merges back; executors need not record changes. */
@@ -431,13 +460,16 @@ export interface WorkspaceManager {
   /**
    * Optional: gives one attempt its own copy of `workspace` so it can write while other steps
    * write too. Returns null when the workspace cannot be copied (the attempt then runs in
-   * place under its write lease).
+   * place under its write lease). Isolating an attempt again, once its copy was merged or
+   * discarded, gives a fresh copy at the same path. `mergeCheck` runs on merged code before
+   * it lands whenever the attempt's changes merge with changes made meanwhile.
    */
   isolate?(input: {
     runId: string;
     attemptId: string;
     nodeId: string;
     workspace: RunWorkspaceBinding;
+    mergeCheck?: WorkspaceMergeCheck;
   }): Promise<IsolatedWorkspace | null>;
 }
 
@@ -460,14 +492,20 @@ export class WorkspaceMergeConflictError extends Error {
   readonly files: readonly string[];
   /** Where the attempt's changes were kept, if anywhere. */
   readonly branch?: string;
+  /** The changes merged line by line, but the workspace's merge check failed on the result. */
+  readonly check?: { readonly command: string; readonly output: string };
 
-  constructor(files: readonly string[], branch?: string) {
+  constructor(files: readonly string[], branch?: string, check?: { command: string; output: string }) {
+    const kept = branch ? `; the changes are kept on branch ${branch}` : '';
     super(
-      `Could not merge the step's changes back into the workspace: ${files.length > 0 ? files.join(', ') : 'conflicting edits'} changed meanwhile${branch ? `; the changes are kept on branch ${branch}` : ''}`
+      check
+        ? `The step's changes merged with changes made meanwhile, but \`${check.command}\` failed on the result${kept}`
+        : `Could not merge the step's changes back into the workspace: ${files.length > 0 ? files.join(', ') : 'conflicting edits'} changed meanwhile${kept}`
     );
     this.name = 'WorkspaceMergeConflictError';
     this.files = files;
     if (branch) this.branch = branch;
+    if (check) this.check = check;
   }
 }
 

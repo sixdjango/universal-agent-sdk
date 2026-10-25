@@ -22,6 +22,11 @@
       "ua-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./client": {
+      "ua-source": "./src/client.ts",
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
     }
   },
   "files": [
@@ -29,7 +34,7 @@
     "src"
   ],
   "scripts": {
-    "build": "node ../../scripts/build-workflow-package.mjs --platform node --entries index,cli",
+    "build": "node ../../scripts/build-workflow-package.mjs --platform node --entries index,cli,client",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "start": "node dist/cli.js",
@@ -37,7 +42,7 @@
     "demo": "tsx --conditions=ua-source scripts/demo-server.mjs",
     "dev": "tsx watch --conditions=ua-source --clear-screen=false src/cli.ts",
     "dev:demo": "tsx watch --conditions=ua-source --clear-screen=false scripts/demo-server.mjs",
-    "seed:test": "tsx --conditions=ua-source scripts/seed-test-workflows.mjs"
+    "test:acceptance:live": "tsx --conditions=ua-source scripts/run-acceptance-flow.mjs"
   },
   "engines": {
     "node": ">=22.13.0"

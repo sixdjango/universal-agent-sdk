@@ -1,4 +1,4 @@
-import { blob, index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { blob, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /**
  * SQLite layout for the workflow kit.
@@ -11,6 +11,47 @@ import { blob, index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm
  */
 
 const json = (name: string) => text(name, { mode: 'json' });
+
+// Shared chat/execution history. These tables do not require a Flow definition or run.
+export const conversations = sqliteTable('conversations', {
+  id: text('id').primaryKey(),
+  record: json('record_json').notNull(),
+});
+
+/** Generic host correlation, indexed independently of graph/run storage. */
+export const conversationSources = sqliteTable('conversation_sources', {
+  conversationId: text('conversation_id').notNull().references(() => conversations.id),
+  namespace: text('namespace').notNull(),
+  key: text('key').notNull(),
+  value: text('value').notNull(),
+}, t => [
+  primaryKey({ columns: [t.conversationId, t.key] }),
+  index('conversation_source_lookup_idx').on(t.namespace, t.key, t.value, t.conversationId),
+]);
+
+export const conversationTurns = sqliteTable('conversation_turns', {
+  conversationId: text('conversation_id').notNull().references(() => conversations.id),
+  id: text('id').notNull(),
+  number: integer('number').notNull(),
+  status: text('status').notNull(),
+  idempotencyKey: text('idempotency_key'),
+  record: json('record_json').notNull(),
+}, t => [
+  primaryKey({ columns: [t.conversationId, t.id] }),
+  uniqueIndex('conversation_turn_number_idx').on(t.conversationId, t.number),
+  uniqueIndex('conversation_turn_request_idx').on(t.conversationId, t.idempotencyKey),
+  index('conversation_turn_queue_idx').on(t.conversationId, t.status, t.number),
+]);
+
+export const conversationEvents = sqliteTable('conversation_events', {
+  conversationId: text('conversation_id').notNull().references(() => conversations.id),
+  sequence: integer('sequence').notNull(),
+  turnId: text('turn_id'),
+  event: json('event_json').notNull(),
+}, t => [
+  primaryKey({ columns: [t.conversationId, t.sequence] }),
+  index('conversation_events_turn_idx').on(t.conversationId, t.turnId, t.sequence),
+]);
 
 // ---------------------------------------------------------------------------
 // Contract layer
@@ -49,6 +90,8 @@ export const definitionEdges = sqliteTable('definition_edges', {
   required: integer('required', { mode: 'boolean' }),
   delivery: text('delivery'),
   condition: json('condition_json'),
+  /** Control edges only: set on a loop's way back (round limit and what happens after it). */
+  loop: json('loop_json'),
 }, (t) => [
   primaryKey({ columns: [t.definitionDigest, t.scopePath, t.edgeId] }),
   index('definition_edges_to_idx').on(t.definitionDigest, t.scopePath, t.toNodeId),
@@ -290,3 +333,26 @@ export const workspaceLeases = sqliteTable('workspace_leases', {
   ownerId: text('owner_id').notNull(),
   expiresAtMs: integer('expires_at_ms').notNull(),
 }, (t) => [index('workspace_leases_workspace_idx').on(t.workspace)]);
+
+/**
+ * Intermediate data steps save while they work (progress, partial results, notes). `owner` is
+ * `<scopeKey>#<nodeId>` for a step's own records and empty for records shared by the run;
+ * writing an existing (run, owner, collection, key) replaces its value.
+ */
+export const nodeData = sqliteTable('node_data', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  runId: text('run_id').notNull(),
+  namespace: text('namespace', { enum: ['node', 'run'] }).notNull(),
+  owner: text('owner').notNull(),
+  scopeKey: text('scope_key').notNull(),
+  nodeId: text('node_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  collection: text('collection').notNull(),
+  key: text('key').notNull(),
+  value: json('value_json').notNull(),
+  createdAtMs: integer('created_at_ms').notNull(),
+  updatedAtMs: integer('updated_at_ms').notNull(),
+}, (t) => [
+  uniqueIndex('node_data_key_idx').on(t.runId, t.owner, t.collection, t.key),
+  index('node_data_node_idx').on(t.runId, t.nodeId, t.collection),
+]);

@@ -7,6 +7,7 @@ import {
   type CompiledGraphScope,
   type CompiledWorkflowPlan,
   parseAgentRef,
+  type ThinkingStep,
   type WaitRequest,
   type WorkflowEvent,
 } from '@universal-agent/workflow-contract';
@@ -35,6 +36,12 @@ export interface ApplyChiefDecisionInput {
   readonly chiefAgent?: PinnedAgent;
   /** Profiles for `swap_agent` targets, resolved by the caller beforehand. */
   readonly resolvedAgents: Readonly<Record<string, PinnedAgent>>;
+  /** Host allowlist, enforced again when committing the decision. */
+  readonly allowedCommands?: readonly ChiefCommand['kind'][];
+  /** Reopening execution while another node is in flight could publish obsolete results. */
+  readonly hasActiveNodeExecutions?: boolean;
+  readonly durationMs?: number;
+  readonly steps?: readonly ThinkingStep[];
   readonly nowMs: number;
   readonly newId: (prefix: string) => string;
 }
@@ -93,9 +100,18 @@ function applyCommand(
   command: ChiefCommand
 ): RunSnapshotState {
   const { plan, policy } = input;
+  if (input.allowedCommands && !input.allowedCommands.includes(command.kind)) {
+    throw new CommandRejection(`command "${command.kind}" is disabled by the host`);
+  }
   const level = CHIEF_COMMAND_LEVEL[command.kind];
   if (CHIEF_LEVEL_RANK[level] > CHIEF_LEVEL_RANK[policy.maxLevel]) {
     throw new CommandRejection(`requires level "${level}" but policy caps at "${policy.maxLevel}"`);
+  }
+  if (command.kind !== 'report' && state.chief.interventionCount >= policy.maxInterventionsPerRun) {
+    throw new CommandRejection(`maxInterventionsPerRun ${policy.maxInterventionsPerRun} has been reached`);
+  }
+  if (input.hasActiveNodeExecutions && (command.kind === 'retry_node' || command.kind === 'rerun_from_node')) {
+    throw new CommandRejection('nodes are still executing; retry or rerun after they settle');
   }
 
   switch (command.kind) {
@@ -157,7 +173,12 @@ function applyCommand(
       }
       const pinned = input.resolvedAgents[command.agentRef];
       if (!pinned) throw new CommandRejection(`agent "${command.agentRef}" could not be resolved`);
-      if (!hasAgentNode(plan.rootScope, command.nodeId)) {
+      if (command.scopeKey !== undefined) {
+        const compiled = resolveCompiledScopeByKey(plan, requireScope(state, command.scopeKey).scopeKey);
+        if (compiled.nodesById[command.nodeId]?.kind !== 'agent') {
+          throw new CommandRejection(`"${command.nodeId}" is not an AgentNode in "${command.scopeKey}"`);
+        }
+      } else if (!hasAgentNode(plan.rootScope, command.nodeId)) {
         throw new CommandRejection(`no AgentNode "${command.nodeId}" exists in this workflow`);
       }
       return {
@@ -182,6 +203,7 @@ function applyCommand(
       if (!wait || wait.status !== 'PENDING') {
         throw new CommandRejection(`no pending WaitRequest "${command.requestId}"`);
       }
+      if (wait.requiredRole) throw new CommandRejection(`question requires role "${wait.requiredRole}"; the chief cannot answer for that role`);
       const nodeDef = resolveCompiledScopeByKey(plan, wait.scopeKey).nodesById[wait.nodeId];
       if (nodeDef?.kind !== 'agent') {
         throw new CommandRejection('only questions raised by AgentNodes may be answered by the chief');
@@ -294,11 +316,13 @@ export function applyChiefDecision(input: ApplyChiefDecisionInput): AppliedChief
     rationale: input.decision.rationale,
     applied,
     rejected,
+    ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
+    ...(input.steps && input.steps.length > 0 ? { steps: input.steps } : {}),
     timestampMs: input.nowMs,
   };
 
   // Answering a human without acting does not use up the intervention budget.
-  const intervened = input.trigger.kind !== 'user.message' || applied.length > 0;
+  const intervened = input.trigger.kind !== 'user.message' || applied.some(command => command.kind !== 'report');
   const chief = {
     ...state.chief,
     interventionCount: state.chief.interventionCount + (intervened ? 1 : 0),

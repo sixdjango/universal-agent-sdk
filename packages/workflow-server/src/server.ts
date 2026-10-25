@@ -6,6 +6,9 @@ import type { SqliteAgentRegistry } from '@universal-agent/workflow-agents';
 import {
   type AgentRuntimeInfo,
   type CanvasLayout,
+  ConversationError,
+  listWorkflowConversations,
+  type ConversationServiceOptions,
   type WorkflowDatabase,
   WorkflowHost,
   WorkflowHostError,
@@ -14,6 +17,19 @@ import type { WorkflowRuntime } from '@universal-agent/workflow-runtime';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { z } from 'zod';
 import { HttpError, notFound } from './errors';
+import { registerConversationRoutes } from './conversations';
+import { buildOpenApiDocument } from './openapi';
+import {
+  ChiefMessageBody,
+  CreateWorkspaceBody,
+  LayoutSchema,
+  RerunBody,
+  RespondBody,
+  SaveWorkflowBody,
+  StartRunBody,
+  UpdateWorkspaceBody,
+  WorkspaceBindingsSchema,
+} from './http-schemas';
 import { createSampleWorkflow, SAMPLE_AGENTS } from './samples';
 import { LOOPBACK_HOSTS, registerRequestGuards } from './security';
 
@@ -43,40 +59,19 @@ export interface WorkflowServerOptions {
   /** Poll interval for live run streams (default 300 ms). */
   readonly streamPollMs?: number;
   readonly logger?: FastifyServerOptions['logger'];
+  /** Core chat options; SQLite is supplied by the default Node host. */
+  readonly conversationOptions?: ConversationServiceOptions;
 }
 
 export interface WorkflowServer {
   readonly app: FastifyInstance;
+  /** Every route the server registered, as `{ method, url }` (Fastify `:param` style). */
+  readonly routes: readonly { readonly method: string; readonly url: string }[];
   /** The transport-free services this server exposes over HTTP. */
   readonly host: WorkflowHost;
 }
 
 const HOST_ERROR_STATUS = { not_found: 404, conflict: 409, invalid: 400 } as const;
-
-const JsonRecord = z.record(z.string(), z.unknown());
-const LayoutSchema = z.record(z.string(), z.object({ x: z.number(), y: z.number() }));
-const SaveWorkflowBody = z.object({ definition: z.unknown(), layout: LayoutSchema.optional() });
-const WorkspaceBindingsSchema = z.record(z.string(), z.string().min(1));
-const StartRunBody = z.object({
-  workflowId: z.string().min(1),
-  inputs: JsonRecord.default({}),
-  /** Workspace id per slot; remembered as the workflow's defaults for the next run. */
-  workspaces: WorkspaceBindingsSchema.default({}),
-});
-const IsolationSchema = z.enum(['in-place', 'git-worktree']);
-const CreateWorkspaceBody = z.object({
-  name: z.string().optional(),
-  path: z.string().min(1),
-  isolation: IsolationSchema.optional(),
-});
-const UpdateWorkspaceBody = CreateWorkspaceBody.partial();
-const RespondBody = z.object({
-  requestId: z.string().min(1),
-  answer: z.union([z.string(), JsonRecord]),
-  responderId: z.string().min(1).default('web'),
-});
-const RerunBody = z.object({ nodeId: z.string().min(1), scopeKey: z.string().min(1).optional() });
-const ChiefMessageBody = z.object({ text: z.string().trim().min(1).max(8000), authorId: z.string().min(1).default('web') });
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -92,10 +87,15 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
  */
 export async function createWorkflowServer(options: WorkflowServerOptions): Promise<WorkflowServer> {
   const app = Fastify({ logger: options.logger ?? false });
+  const routes: { method: string; url: string }[] = [];
+  app.addHook('onRoute', (route) => {
+    for (const method of [route.method].flat()) if (method !== 'HEAD') routes.push({ method, url: route.url });
+  });
   const host = await WorkflowHost.open({
     runtime: options.runtime,
     db: options.db,
     logger: app.log,
+    conversationOptions: options.conversationOptions,
     ...(options.workdir ? { workdir: options.workdir } : {}),
     ...(options.worktreesDir ? { worktreesDir: options.worktreesDir } : {}),
   });
@@ -113,6 +113,10 @@ export async function createWorkflowServer(options: WorkflowServerOptions): Prom
       return reply
         .code(HOST_ERROR_STATUS[error.code])
         .send({ error: error.message, ...(error.details ? { details: error.details } : {}) });
+    }
+    if (error instanceof ConversationError) {
+      const status = error.code === 'not_found' ? 404 : error.code === 'invalid' ? 400 : error.code === 'storage_failed' ? 500 : 409;
+      return reply.code(status).send({ error: error.message, code: error.code });
     }
     const { statusCode, message } = error as { statusCode?: number; message?: string };
     if (statusCode && statusCode < 500) {
@@ -134,6 +138,13 @@ export async function createWorkflowServer(options: WorkflowServerOptions): Prom
   // ---------------------------------------------------------------------------
 
   app.get('/api/health', async () => ({ ok: true }));
+
+  const openApi = buildOpenApiDocument();
+  app.get('/api/openapi.json', async (request) => ({
+    ...openApi,
+    servers: [{ url: `${request.protocol}://${request.headers.host ?? '127.0.0.1:4317'}` }],
+  }));
+  registerConversationRoutes(app, host.conversations, streamPollMs);
 
   app.get('/api/workflows', async () => ({ workflows: library.list() }));
 
@@ -260,7 +271,18 @@ export async function createWorkflowServer(options: WorkflowServerOptions): Prom
     run: await runs.get(request.params.id),
     active: runs.isActive(request.params.id),
     chiefAnswering: runs.isChiefAnswering(request.params.id),
+    liveProgress: runs.getLiveProgress(request.params.id),
   }));
+
+  app.get<{ Params: { id: string } }>('/api/runs/:id/conversations', async request => {
+    await runs.get(request.params.id);
+    const query = parse(z.object({
+      scopeKey: z.string().optional(), nodeId: z.string().optional(), attemptId: z.string().optional(), invocationId: z.string().optional(),
+      retryIndex: z.coerce.number().int().nonnegative().optional(), roundIndex: z.coerce.number().int().nonnegative().optional(),
+      afterId: z.string().optional(), limit: z.coerce.number().int().min(1).max(1000).optional(),
+    }), request.query);
+    return { conversations: await listWorkflowConversations(host.conversations.store, { ...query, runId: request.params.id }) };
+  });
 
   /** Talk to the run's chief; its reply streams in as a `chief.intervened` log event. */
   app.post<{ Params: { id: string } }>('/api/runs/:id/chief/messages', async (request, reply) => {
@@ -273,6 +295,11 @@ export async function createWorkflowServer(options: WorkflowServerOptions): Prom
     await runs.respond({ runId: request.params.id, ...body });
     return reply.code(202).send({ accepted: true });
   });
+
+  /** Stops the run for good; steps still executing are aborted and their results dropped. */
+  app.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (request) => ({
+    run: await runs.cancel(request.params.id),
+  }));
 
   app.post<{ Params: { id: string } }>('/api/runs/:id/rerun', async (request, reply) => {
     const body = parse(RerunBody, request.body);
@@ -312,7 +339,11 @@ export async function createWorkflowServer(options: WorkflowServerOptions): Prom
             afterSeq = entry.seq;
           }
           raw.write(
-            `event: activity\ndata: ${JSON.stringify({ active: runs.isActive(request.params.id), chiefAnswering: runs.isChiefAnswering(request.params.id) })}\n\n`
+            `event: activity\ndata: ${JSON.stringify({
+              active: runs.isActive(request.params.id),
+              chiefAnswering: runs.isChiefAnswering(request.params.id),
+              liveProgress: runs.getLiveProgress(request.params.id),
+            })}\n\n`
           );
         } catch (err) {
           app.log.error({ err }, 'run stream poll failed');
@@ -337,6 +368,34 @@ export async function createWorkflowServer(options: WorkflowServerOptions): Prom
       await flush();
     }
   );
+
+  /** Problems still open: what reviews left and the issues steps logged, most severe first. */
+  app.get<{ Params: { id: string } }>('/api/runs/:id/findings', async (request) => {
+    await runs.get(request.params.id);
+    return { findings: await options.runtime.getOpenFindings(request.params.id) };
+  });
+
+  /** Intermediate data steps saved (`ua-workflow data …` / the `data_*` MCP tools), oldest first. */
+  app.get<{
+    Params: { id: string };
+    Querystring: { nodeId?: string; scopeKey?: string; namespace?: string; collection?: string; afterId?: string; limit?: string };
+  }>('/api/runs/:id/data', async (request) => {
+    await runs.get(request.params.id);
+    const q = request.query;
+    if (q.namespace !== undefined && q.namespace !== 'node' && q.namespace !== 'run') {
+      throw new HttpError(400, 'namespace must be "node" or "run"');
+    }
+    const records = await options.runtime.nodeData.query({
+      runId: request.params.id,
+      ...(q.namespace ? { namespace: q.namespace } : {}),
+      ...(q.nodeId ? { nodeId: q.nodeId } : {}),
+      ...(q.scopeKey ? { scopeKey: q.scopeKey } : {}),
+      ...(q.collection ? { collection: q.collection } : {}),
+      ...(q.afterId ? { afterId: Number(q.afterId) || 0 } : {}),
+      limit: Math.min(Number(q.limit ?? 500) || 500, 2000),
+    });
+    return { records };
+  });
 
   app.get<{ Params: { id: string }; Querystring: { offset?: string; max?: string } }>(
     '/api/artifacts/:id',
@@ -372,5 +431,5 @@ export async function createWorkflowServer(options: WorkflowServerOptions): Prom
     });
   }
 
-  return { app, host };
+  return { app, host, routes };
 }

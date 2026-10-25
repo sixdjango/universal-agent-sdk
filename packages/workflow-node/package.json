@@ -14,6 +14,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "ua-workflow": "./dist/workflow-cli.js"
+  },
   "exports": {
     ".": {
       "ua-source": "./src/index.ts",
@@ -28,7 +31,7 @@
     "drizzle-host"
   ],
   "scripts": {
-    "build": "node ../../scripts/build-workflow-package.mjs --platform node --entries index,mcp-bridge",
+    "build": "node ../../scripts/build-workflow-package.mjs --platform node --entries index,mcp-bridge,workflow-cli",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",

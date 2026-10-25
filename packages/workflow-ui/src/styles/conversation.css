@@ -1,0 +1,126 @@
+/* Execution detail only. Canvas positions, cards and edges are unaffected. */
+.execution-detail-tabs {
+  display: flex;
+  gap: 16px;
+  border-bottom: 1px solid var(--trace-border);
+  margin: 14px 0;
+}
+.execution-detail-tabs button {
+  padding: 8px 0;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--trace-text-2);
+  font: inherit;
+  cursor: pointer;
+}
+.execution-detail-tabs button[aria-selected='true'] { color: var(--trace-text); border-bottom-color: var(--trace-playhead); }
+.trace-detail-card[data-tab='conversation'] {
+  width: min(600px, calc(100% - 44px));
+}
+.trace-execution-overlay { padding: 0; pointer-events: none; overflow: visible; z-index: 25; }
+/* On the canvas, a step's details open as a full-height panel on the right, above the chief dock. */
+.trace-execution-overlay .trace-detail-card,
+.trace-execution-overlay .trace-detail-card[data-tab='conversation'] {
+  top: 72px;
+  right: 16px;
+  bottom: 96px;
+  width: min(440px, calc(100% - 32px));
+  max-height: none;
+  overflow-y: auto;
+  pointer-events: auto;
+  animation: panel-in 0.2s var(--ease) both;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+.node-conversation { min-width: 0; font-size: 13px; line-height: 1.5; }
+.conversation-toolbar { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+.conversation-toolbar label { display: grid; flex: 1; min-width: 0; gap: 5px; color: var(--trace-text-2); font-size: 12px; }
+.conversation-toolbar select {
+  min-width: 0;
+  width: 100%;
+  background: var(--trace-surface);
+  color: var(--trace-text);
+  border: 1px solid var(--trace-border);
+  border-radius: 6px;
+  padding: 7px;
+  font: inherit;
+}
+.conversation-outcome { border-left: 3px solid var(--trace-playhead); border-radius: 4px; padding: 8px 10px; background: var(--trace-row-hover); }
+.conversation-outcome[data-status='completed'] { border-color: #22a675; }
+.conversation-outcome[data-status='failed'], .conversation-outcome[data-status='cancelled'] { border-color: #e46f77; }
+.conversation-outcome[data-status='truncated'], .conversation-outcome[data-status='refused'],
+.conversation-outcome[data-status='interrupted'], .conversation-outcome[data-status='waiting_permission'] { border-color: #d7a242; }
+.conversation-outcome pre, .conversation-error { color: var(--danger, #ed8796); }
+.conversation-outcome pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); }
+.conversation-outcome p { margin: 6px 0 0; }
+.conversation-error { padding: 10px; border: 1px solid currentColor; border-radius: 6px; margin: 8px 0; overflow-wrap: anywhere; }
+.conversation-error p { margin: 4px 0 0; }
+.conversation-muted, .conversation-meta { color: var(--trace-text-2, var(--text-2)); font-size: 12px; overflow-wrap: anywhere; }
+.conversation-meta { margin: 6px 0; }
+/* Messages scroll in a box of their own, so a long transcript renders only what is in view. */
+.conversation-messages {
+  max-height: min(560px, 60vh);
+  margin: 12px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Rows are measured; spacing comes from the list, not margins that would collapse out of them. */
+.conversation-messages > div > .conversation-message,
+.conversation-messages > div > div > .conversation-message {
+  margin: 0;
+}
+
+.conversation-message {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--trace-border, var(--border));
+  border-radius: 8px;
+  background: var(--trace-surface, var(--card));
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.conversation-message header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.conversation-message header strong { font-size: 12px; }
+.conversation-message header > span { color: var(--trace-text-2, var(--text-2)); font-size: 11px; }
+.conversation-message[data-kind='user'] { border-left: 3px solid var(--trace-playhead, #4c8dff); }
+.conversation-message[data-kind='thought'] { color: var(--trace-text-2, var(--text-2)); background: transparent; }
+.conversation-message[data-kind='permission'] { border-left: 3px solid #d7a242; }
+.conversation-badge { padding: 1px 6px; border: 1px solid var(--trace-border); border-radius: 4px; flex-shrink: 0; }
+.conversation-badge[data-status='failed'] { color: var(--danger, #ed8796); }
+.conversation-content + .conversation-content { margin-top: 4px; }
+.conversation-text, .conversation-json pre {
+  margin: 6px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 340px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font: 12px/1.65 var(--mono);
+  tab-size: 2;
+}
+.conversation-text { font-family: inherit; font-size: 13px; }
+.conversation-json, .conversation-extra { margin: 8px 0; min-width: 0; }
+.conversation-json summary, .conversation-extra summary { cursor: pointer; color: var(--trace-text-2, var(--text-2)); font-size: 12px; }
+.conversation-json pre { padding: 8px; border: 1px solid var(--trace-border, var(--border)); border-radius: 5px; }
+.conversation-image { display: block; max-width: 100%; max-height: 320px; object-fit: contain; margin: 8px 0; }
+.conversation-content audio { width: 100%; margin: 6px 0; }
+.conversation-resource { display: grid; gap: 4px; margin: 6px 0; }
+.conversation-resource a { color: var(--trace-playhead, #4c8dff); }
+.conversation-resource code { font-size: 11px; color: var(--trace-text-2, var(--text-2)); }
+.conversation-diff { margin-top: 10px; }
+.conversation-message ol { padding-left: 20px; }
+.conversation-message li small { display: block; color: var(--trace-text-2, var(--text-2)); }
+
+@media (max-width: 600px) {
+  .trace-detail-card[data-tab='conversation'] { right: 8px; width: calc(100% - 16px); padding: 12px; }
+  .trace-execution-overlay .trace-detail-card { right: 8px; width: calc(100% - 16px); }
+  .conversation-message { padding: 9px; }
+}

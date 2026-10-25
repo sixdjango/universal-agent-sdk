@@ -1,6 +1,5 @@
 import {
   type WorkflowDefinition,
-  WorkflowDefinitionSchema,
   validateWorkflowDefinition,
 } from '@universal-agent/workflow-contract';
 import { type Clock, SystemClock } from '@universal-agent/workflow-runtime';
@@ -77,10 +76,9 @@ export class WorkflowLibrary {
       description: row.description,
       digest: row.latestDigest,
       updatedAtMs: row.updatedAtMs,
-      // Stored definitions predate newer contract defaults; parse to fill them in.
-      definition: WorkflowDefinitionSchema.parse(latest.definition),
+      definition: latest.definition as WorkflowDefinition,
       layout: row.layout as CanvasLayout,
-      workspaceBindings: (row.workspaceBindings ?? {}) as WorkspaceBindings,
+      workspaceBindings: row.workspaceBindings as WorkspaceBindings,
       versions: versions.map(({ digest, createdAtMs }) => ({ digest, createdAtMs })),
     };
   }

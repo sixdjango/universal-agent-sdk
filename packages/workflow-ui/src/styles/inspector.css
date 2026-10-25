@@ -12,7 +12,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--card-raised);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-pop);
   animation: pop-in 0.18s var(--ease) both;
 }
 
@@ -56,6 +56,12 @@
   color: var(--text-3);
 }
 
+.inspector-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 8px 10px;
+}
+
 .inspector-issues {
   margin: 0 8px 10px;
   padding: 8px 10px;
@@ -78,6 +84,11 @@
   font-weight: 500;
   color: var(--text);
 }
+
+.connection-explanation { font-size: 12px; line-height: 1.5; color: var(--text-2); }
+.connection-explanation p { margin: 0 8px 8px; }
+.connection-explanation ul { margin: 0 8px 10px; padding-left: 18px; }
+.connection-explanation li { margin: 4px 0; overflow-wrap: anywhere; }
 
 .field-hint {
   font-style: normal;
@@ -219,3 +230,39 @@
   flex-wrap: wrap;
   gap: 4px 12px;
 }
+
+/* Conditions combined with all / any: one box per condition, joined by "and" / "or". */
+.condition-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.condition-item {
+  padding: 8px 10px 2px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--row);
+}
+
+.condition-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.condition-item .icon-btn {
+  opacity: 1;
+}
+
+.condition-item .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+

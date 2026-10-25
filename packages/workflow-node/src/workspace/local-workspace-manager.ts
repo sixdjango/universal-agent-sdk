@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { RunWorkspaceBinding } from '@universal-agent/workflow-contract';
+import type { RunWorkspaceBinding, WorkspaceMergeCheck } from '@universal-agent/workflow-contract';
 import type { IsolatedWorkspace, WorkspaceLease, WorkspaceManager } from '@universal-agent/workflow-runtime';
 import { eq, lt } from 'drizzle-orm';
 import type { WorkflowDatabase } from '../store/sqlite/database';
@@ -74,9 +74,11 @@ export class LocalWorkspaceManager implements WorkspaceManager {
     attemptId: string;
     nodeId: string;
     workspace: RunWorkspaceBinding;
+    mergeCheck?: WorkspaceMergeCheck;
   }): Promise<IsolatedWorkspace | null> {
     return forkWorkspace({
       dir: input.workspace.path,
+      ...(input.mergeCheck ? { mergeCheck: input.mergeCheck } : {}),
       forkPath: join(this.forksDir, safe(input.runId), safe(input.attemptId)),
       conflictBranch: `ua/${safe(shortRunId(input.runId))}/${safe(input.nodeId)}-${safe(input.attemptId.slice(-6))}`,
       withMergeLock: async (fn) => {

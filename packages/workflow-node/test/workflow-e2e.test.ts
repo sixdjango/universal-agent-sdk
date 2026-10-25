@@ -9,7 +9,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 import { foldRunLog } from '@universal-agent/workflow-runtime';
 import { eq } from 'drizzle-orm';
-import { createNodeWorkflowRuntime, openWorkflowDatabase, workflowSchema } from '../src/index';
+import { createNodeWorkflowRuntime, createNodeConversationService, listWorkflowConversations, openWorkflowDatabase, workflowSchema } from '../src/index';
 
 describe('@universal-agent/workflow-node: End-to-End Multi-Agent & Script Workflow Tests', () => {
   const tempDirs: string[] = [];
@@ -136,10 +136,16 @@ rl.on('line', (line) => {
       },
     });
 
+    if (process.env.MOCK_DISCONNECT_AFTER_CHUNK === '1') {
+      // Flush the partial message, then close the transport without a prompt response.
+      process.stdout.end(() => process.exit(0));
+      return;
+    }
+
     send({
       jsonrpc: '2.0',
       id: msg.id,
-      result: { stopReason: 'end_turn' },
+      result: { stopReason: process.env.MOCK_STOP_REASON || 'end_turn' },
     });
     return;
   }
@@ -256,6 +262,20 @@ process.exit(0);
 
       const db = openWorkflowDatabase(databasePath);
       try {
+        // A new reader can find native Flow transcripts without any live session or server.
+        const conversations = createNodeConversationService({ db });
+        const records = await listWorkflowConversations(conversations.store, { runId: initial.runId });
+        expect(records).toHaveLength(4);
+        for (const roundIndex of [0, 1]) {
+          const round = await listWorkflowConversations(conversations.store, { runId: initial.runId, roundIndex });
+          expect(round).toHaveLength(2);
+          expect(round.every(record => record.source?.identifiers.scopeKey === `$root/fix_loop:round_${roundIndex}`)).toBe(true);
+        }
+        for (const record of records) {
+          const [turn] = (await conversations.store.listTurns(record.id)).items;
+          expect(turn.status).toBe('completed');
+          expect(await conversations.getMessages(record.id, turn.id)).toContainEqual(expect.objectContaining({ role: 'assistant', kind: 'content' }));
+        }
         const contractEdges = db
           .select()
           .from(workflowSchema.definitionEdges)
@@ -585,6 +605,50 @@ process.exit(0);
       expect(done.status).toBe('SUCCEEDED');
       const attempt = done.attempts[done.scopes.$root!.nodes.think!.latestAttemptId!]!;
       expect(attempt.receipt?.effort).toBe('high');
+    },
+    30_000
+  );
+
+  it.each(['max_tokens', 'max_turn_requests', 'refusal', 'disconnect'])(
+    'does not complete a node after a real ACP stream ends with %s',
+    async (termination) => {
+      const workdir = mkdtempSync(join(tmpdir(), 'ua-wf-terminal-work-'));
+      const storageDir = mkdtempSync(join(tmpdir(), 'ua-wf-terminal-store-'));
+      tempDirs.push(workdir, storageDir);
+      const agentScript = createMockAcpAgentScript(workdir);
+      const flow = createWorkflowBuilder('interrupted-turn')
+        .addAgent({
+          id: 'worker', name: 'Worker', role: 'worker', goal: 'Produce a candidate',
+          outputs: [{ name: 'candidate', type: 'artifact', required: true }],
+        })
+        .addAgent({ id: 'consumer', name: 'Consumer', role: 'worker', goal: 'Use the candidate' })
+        .connectControl('worker', 'consumer')
+        .buildDefinition();
+      const runtime = createNodeWorkflowRuntime({
+        workdir,
+        homeDir: storageDir,
+        agentDataDir: join(storageDir, 'agent-data'),
+        roleBindings: {
+          worker: {
+            target: { cliType: 'custom', agentType: 'mock-worker-acp', command: process.execPath, args: [agentScript] },
+            env: termination === 'disconnect'
+              ? { MOCK_DISCONNECT_AFTER_CHUNK: '1' }
+              : { MOCK_STOP_REASON: termination },
+          },
+        },
+      });
+      const done = await runtime.runUntilSettled((await runtime.start({ definition: flow })).runId);
+
+      expect(done.status).toBe('FAILED');
+      expect(done.scopes.$root!.nodes.worker!.status).toBe('FAILED');
+      expect(done.scopes.$root!.nodes.worker!.outputs).toEqual({});
+      expect(done.scopes.$root!.nodes.consumer!.latestAttemptId).toBeUndefined();
+      expect(Object.values(done.attempts)).toEqual([
+        expect.objectContaining({ nodeId: 'worker', status: 'FAILED', producedArtifactIds: [] }),
+      ]);
+      expect(done.scopes.$root!.nodes.worker!.error).toMatch(
+        termination === 'disconnect' ? /closed|disconnect|exited/i : new RegExp(termination)
+      );
     },
     30_000
   );

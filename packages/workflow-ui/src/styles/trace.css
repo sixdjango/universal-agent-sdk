@@ -21,7 +21,8 @@
   align-items: flex-start;
 }
 
-.trace-shell[data-theme='light'] {
+.trace-shell[data-theme='light'],
+[data-theme='light'] .trace-shell {
   --trace-bg: #ffffff;
   --trace-surface: #fbfbfd;
   --trace-row-hover: rgba(15, 23, 42, 0.03);
@@ -34,6 +35,21 @@
   --trace-playhead: #3b82f6;
 }
 
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) .trace-shell:not([data-theme='dark']) {
+    --trace-bg: #ffffff;
+    --trace-surface: #fbfbfd;
+    --trace-row-hover: rgba(15, 23, 42, 0.03);
+    --trace-row-selected: rgba(59, 130, 246, 0.08);
+    --trace-border: #e6e8ef;
+    --trace-grid: rgba(15, 23, 42, 0.06);
+    --trace-text: #14161f;
+    --trace-text-2: #646977;
+    --trace-text-3: #8c92a4;
+    --trace-playhead: #3b82f6;
+  }
+}
+
 .trace-card {
   position: relative;
   width: min(1060px, 100%);
@@ -41,7 +57,7 @@
   border-radius: 16px;
   background: var(--trace-bg);
   color: var(--trace-text);
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+  box-shadow: var(--shadow-trace);
   overflow: visible;
   animation: card-in 0.35s var(--ease) both;
 }
@@ -553,8 +569,12 @@
   border-radius: 14px;
   background: var(--trace-bg);
   color: var(--trace-text);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-pop);
   animation: pop-in 0.16s var(--ease) both;
+  /* Stays within the window, above the chief dock; long details scroll inside. */
+  max-height: var(--detail-max-height, calc(100dvh - 180px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .trace-detail-head {

@@ -1,3 +1,4 @@
+import { resolveSubflows, SubflowResolutionError, type WorkflowDefinition } from '@universal-agent/workflow-contract';
 import type { Clock, WorkflowRunState, WorkflowRuntime } from '@universal-agent/workflow-runtime';
 import {
   resolveUniversalAgentHome,
@@ -5,7 +6,8 @@ import {
   type WorkflowDatabase,
 } from '../store/sqlite/database';
 import { invalid, notFound } from './errors';
-import { RunService, type RunServiceLogger } from './run-service';
+import { createNodeConversationService, type ConversationService, type ConversationServiceOptions } from './conversations';
+import { RunService, type RunServiceLogger, type RunServiceOptions } from './run-service';
 import { WorkflowLibrary } from './workflow-library';
 import { type WorkspaceRecord, WorkspaceRegistry } from './workspace-registry';
 
@@ -22,6 +24,10 @@ export interface WorkflowHostOptions {
   readonly worktreesDir?: string;
   readonly clock?: Clock;
   readonly logger?: RunServiceLogger;
+  /** Driver lease settings and continuation policy; runtime/db/clock/logger remain shared by the host. */
+  readonly runOptions?: Omit<RunServiceOptions, 'runtime' | 'db' | 'clock' | 'logger'>;
+  /** Optional host credentials, Agent factory, permission policy and storage override for chats. */
+  readonly conversationOptions?: ConversationServiceOptions;
 }
 
 export interface StartWorkflowInput {
@@ -40,6 +46,7 @@ export class WorkflowHost {
   readonly library: WorkflowLibrary;
   readonly workspaces: WorkspaceRegistry;
   readonly runs: RunService;
+  readonly conversations: ConversationService;
   /** The `workdir` workspace, used by workflows that declare no slots. */
   readonly defaultWorkspace: WorkspaceRecord;
 
@@ -47,11 +54,13 @@ export class WorkflowHost {
     library: WorkflowLibrary;
     workspaces: WorkspaceRegistry;
     runs: RunService;
+    conversations: ConversationService;
     defaultWorkspace: WorkspaceRecord;
   }) {
     this.library = parts.library;
     this.workspaces = parts.workspaces;
     this.runs = parts.runs;
+    this.conversations = parts.conversations;
     this.defaultWorkspace = parts.defaultWorkspace;
   }
 
@@ -65,7 +74,8 @@ export class WorkflowHost {
     return new WorkflowHost({
       library: new WorkflowLibrary({ db: options.db, ...clock }),
       workspaces,
-      runs: new RunService({ runtime: options.runtime, db: options.db, ...(options.logger ? { logger: options.logger } : {}) }),
+      runs: new RunService({ ...options.runOptions, runtime: options.runtime, db: options.db, ...clock, ...(options.logger ? { logger: options.logger } : {}) }),
+      conversations: createNodeConversationService({ db: options.db, ...options.conversationOptions }),
       defaultWorkspace: await workspaces.ensure(options.workdir ?? process.cwd()),
     });
   }
@@ -78,20 +88,31 @@ export class WorkflowHost {
   async startRun(input: StartWorkflowInput): Promise<WorkflowRunState> {
     const record = this.library.get(input.workflowId);
     if (!record) throw notFound(`Workflow "${input.workflowId}"`);
+    const definition = await this.embedSubflows(record.definition);
     const chosen = input.workspaces ?? {};
     const runId = this.runs.nextRunId();
     const bound = await this.workspaces.bindRun({
       runId,
-      definition: record.definition,
+      definition,
       chosen,
       defaults: record.workspaceBindings,
       fallbackWorkspaceId: this.defaultWorkspace.id,
     });
-    const state = await this.runs.start(record.definition, input.inputs ?? {}, { runId, workspaces: bound });
+    const state = await this.runs.start(definition, input.inputs ?? {}, { runId, workspaces: bound });
     if (Object.keys(chosen).length > 0) {
       this.library.setWorkspaceBindings(record.id, { ...record.workspaceBindings, ...chosen });
     }
     return state;
+  }
+
+  /** Embeds the saved workflows its sub-flow steps run, so the run keeps them as they are now. */
+  private async embedSubflows(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
+    try {
+      return await resolveSubflows(definition, async (id) => this.library.get(id)?.definition ?? null);
+    } catch (error) {
+      if (error instanceof SubflowResolutionError) throw invalid(error.message);
+      throw error;
+    }
   }
 
   /** Unregisters a workspace; the default workspace stays, since slot-less workflows run there. */
@@ -103,8 +124,10 @@ export class WorkflowHost {
   }
 
   /** Stops driving runs; they stay RUNNING in storage and `runs.resumeInterrupted()` picks them up later. */
-  close(): Promise<void> {
-    return this.runs.close();
+  async close(): Promise<void> {
+    const results = await Promise.allSettled([this.runs.close(), this.conversations.shutdown()]);
+    const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Host shutdown failed');
   }
 }
 

@@ -2,6 +2,8 @@ import {
   type AssessmentVerdict,
   type ChiefLevel,
   ChiefPolicySchema,
+  edgeConditionSource,
+  supportsParallel,
   type EdgeCondition,
   type LoopNode,
   type ParallelNode,
@@ -14,6 +16,9 @@ import {
 import { type ReactNode, useEffect, useState } from 'react';
 import type { AgentListing, AgentRuntimeInfo } from '../types';
 import { RuntimeFields } from './RuntimeFields';
+import { expandLoopIntoCycle } from '../model/cycle-editing';
+import { describeCondition } from '../model/canvas';
+import { conditionText } from '../model/conditions';
 import {
   addWorkspaceSlot,
   inheritedWorkspaceSlot,
@@ -27,6 +32,7 @@ import { compilerScopePath, containerAt, graphAt, INPUTS_NODE_ID, OUTPUTS_NODE_I
 import {
   addPort,
   findControlEdge,
+  findExecutionPath,
   implicitPorts,
   type PortSide,
   portsOf,
@@ -34,6 +40,7 @@ import {
   removeNode,
   removePort,
   setEdgeCondition,
+  updateLoopBack,
   updateNode,
   updatePort,
   updateWorkflowMeta,
@@ -55,6 +62,11 @@ interface InspectorProps {
   onError(message: string): void;
   onOpenScope(nodeId: string): void;
   onRefreshRuntime(agentType: string): Promise<void>;
+  /** Saved workflows a sub-flow step can run. */
+  readonly workflows?: readonly { readonly id: string; readonly name: string }[];
+  /** Points a sub-flow step at a saved workflow (the app loads it and copies its fields). */
+  onChooseSubflow?(nodeId: string, workflowId: string): void;
+  onOpenWorkflow?(workflowId: string): void;
 }
 
 const PORT_TYPES: PortValueType[] = ['string', 'json', 'artifact', 'assessment', 'number', 'boolean', 'array'];
@@ -392,6 +404,28 @@ function NodeFields({ node, props }: { node: WorkflowNode; props: InspectorProps
   return (
     <>
       <TextField label="Name" value={node.name} onChange={(v) => set('name', v)} />
+      {supportsParallel(node) && <section className="inspector-section">
+        <Toggle label="Run items in parallel" desc="The chosen input receives a list. Each execution gets one item; every output is collected in input order."
+          checked={Boolean(node.parallel)} onChange={(enabled) => {
+            if (enabled && !node.inputs.length) { props.onError('Add an input field before enabling per-item execution.'); return; }
+            set('parallel', enabled ? { itemsPort: node.inputs[0]!.name, maxConcurrency: 4, failurePolicy: 'settle_all' } : undefined, false);
+          }} />
+        {node.parallel && <>
+          <Field label="List input" hint="each item keeps this field name">
+            <select aria-label="Parallel list input" value={node.parallel.itemsPort} onChange={e => set('parallel', { ...node.parallel, itemsPort: e.target.value }, false)}>
+              {node.inputs.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+            </select>
+          </Field>
+          <TextField label="Maximum concurrent items" value={String(node.parallel.maxConcurrency)} onChange={v => /^\d+$/.test(v) && Number(v) > 0 && set('parallel', { ...node.parallel, maxConcurrency: Number(v) })} />
+          <Field label="When an item fails">
+            <select aria-label="Parallel failure policy" value={node.parallel.failurePolicy} onChange={e => set('parallel', { ...node.parallel, failurePolicy: e.target.value }, false)}>
+              <option value="settle_all">Finish other items, then fail the batch</option>
+              <option value="fail_fast">Cancel remaining items</option>
+            </select>
+          </Field>
+          <div className="inspector-summary">Field types below describe one execution. On the graph, the selected input and all outputs are arrays. Each item keeps its own retries and conversation.</div>
+        </>}
+      </section>}
       {node.kind === 'agent' && (
         <>
           <Field label="Agent" hint="who performs it">
@@ -475,6 +509,41 @@ function NodeFields({ node, props }: { node: WorkflowNode; props: InspectorProps
           />
         </>
       )}
+      {node.kind === 'subflow' && (
+        <>
+          <Field label="Workflow" hint="the saved workflow it runs">
+            <select
+              aria-label="Sub-flow workflow"
+              value={node.workflowId ?? ''}
+              onChange={(e) => e.target.value && props.onChooseSubflow?.(node.id, e.target.value)}
+            >
+              <option value="" disabled>
+                Choose a workflow…
+              </option>
+              {(props.workflows ?? [])
+                .filter((w) => w.id !== props.definition.id)
+                .map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+            </select>
+          </Field>
+          {node.workflowId && (
+            <div className="inspector-row">
+              <button type="button" className="btn" onClick={() => props.onChooseSubflow?.(node.id, node.workflowId!)} title="Copy its current inputs and outputs again">
+                Refresh fields
+              </button>
+              <button type="button" className="btn" onClick={() => props.onOpenWorkflow?.(node.workflowId!)}>
+                Open workflow
+              </button>
+            </div>
+          )}
+          <div className="inspector-summary">
+            Its inputs and outputs are the workflow’s. Each run embeds the workflow as it is when the run starts.
+          </div>
+        </>
+      )}
       {node.kind === 'gate' && (
         <>
           <TextField label="Question" multiline value={node.prompt} onChange={(v) => set('prompt', v)} />
@@ -524,6 +593,20 @@ function ContainerFields({ node, props }: { node: LoopNode | ParallelNode; props
       <button type="button" className="btn open-scope" onClick={() => props.onOpenScope(node.id)}>
         Open its {inner.nodes.length} step{inner.nodes.length === 1 ? '' : 's'} ›
       </button>
+      {node.kind === 'loop' && (
+        <button
+          type="button"
+          className="btn open-scope"
+          title="Put its steps on this canvas, with a way back from the deciding step"
+          onClick={() => {
+            const result = expandLoopIntoCycle(props.definition, node.id, props.path);
+            if (result.ok) props.onChange(result.definition);
+            else props.onError(result.error);
+          }}
+        >
+          Expand onto the canvas ↻
+        </button>
+      )}
       {node.kind === 'loop' ? (
         <>
           <TextField
@@ -535,7 +618,7 @@ function ContainerFields({ node, props }: { node: LoopNode | ParallelNode; props
             <div className="section-title">Start another round while</div>
             <Field label="Step">
               <select
-                value={node.continueWhen.kind === 'always' ? '' : (node.continueWhen.sourceNodeId ?? '')}
+                value={edgeConditionSource(node.continueWhen) ?? ''}
                 onChange={(e) =>
                   set({
                     continueWhen: e.target.value
@@ -626,41 +709,90 @@ function ContainerFields({ node, props }: { node: LoopNode | ParallelNode; props
   );
 }
 
-function ConditionEditor({ props, edgeId }: { props: InspectorProps; edgeId: string }) {
-  const control = findControlEdge(props.definition, edgeId, props.path);
-  const graph = graphAt(props.definition, props.path);
-  if (!control) {
-    return <div className="popover-note">This connection only carries data; the order comes from another path.</div>;
-  }
-  const source = graph.nodes.find((n) => n.id === control.fromNodeId);
-  const when = control.when;
+const COMPARE_OPS = [
+  { value: '>=', label: '≥' },
+  { value: '>', label: '>' },
+  { value: '<=', label: '≤' },
+  { value: '<', label: '<' },
+  { value: '==', label: '=' },
+  { value: '!=', label: '≠' },
+] as const;
+
+/** A typed value from a text field: numbers, true/false and null as such, anything else as text. */
+function conditionValue(text: string): string | number | boolean | null {
+  const trimmed = text.trim();
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+  if (trimmed === 'true' || trimmed === 'false') return trimmed === 'true';
+  if (trimmed === 'null') return null;
+  return text;
+}
+
+/**
+ * Fields for an edge condition. At the top an edge can also run always or otherwise, or combine
+ * conditions with all/any; each combined condition reads the edge's step (deeper nesting, which
+ * the contract allows, shows as text).
+ */
+function ConditionFields({
+  when,
+  onChange,
+  ports,
+  sourceName,
+  loop,
+  nested = false,
+}: {
+  when: EdgeCondition | undefined;
+  onChange(next: EdgeCondition | undefined): void;
+  ports: readonly string[];
+  sourceName: string;
+  loop: boolean;
+  nested?: boolean;
+}) {
   const kind = when?.kind ?? 'always';
-  const sourcePorts = source?.outputs.map((p) => p.name) ?? [];
-  const apply = (next: EdgeCondition | undefined) => props.onChange(setEdgeCondition(props.definition, control.id, next, props.path));
+  const port = ports[0] ?? 'decision';
+  const leaf = (k: string): EdgeCondition | undefined => {
+    if (k === 'verdict_is') return { kind: 'verdict_is', verdict: loop ? 'NEEDS_FIX' : 'PASS' };
+    if (k === 'port_equals') return { kind: 'port_equals', port, value: '' };
+    if (k === 'port_truthy') return { kind: 'port_truthy', port };
+    if (k === 'port_compare') return { kind: 'port_compare', port, op: '>=', value: 0 };
+    return undefined;
+  };
+  const choose = (k: string) => {
+    if (k === 'always') onChange(undefined);
+    else if (k === 'otherwise') onChange({ kind: 'otherwise' });
+    else if (k === 'all' || k === 'any') {
+      const first = when && when.kind !== 'always' && when.kind !== 'otherwise' && when.kind !== 'all' && when.kind !== 'any' ? when : leaf('verdict_is')!;
+      onChange({ kind: k, conditions: when?.kind === 'all' || when?.kind === 'any' ? when.conditions : [first] });
+    } else onChange(leaf(k));
+  };
+  const portSelect = (current: string, set: (p: string) => void) => (
+    <Field label={`Output of “${sourceName}”`}>
+      <select value={current} onChange={(e) => set(e.target.value)}>
+        {[...new Set([current, ...ports])].map((p) => (
+          <option key={p} value={p}>
+            {p}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
 
   return (
-    <section className="inspector-section">
-      <div className="section-title">Run “{graph.nodes.find((n) => n.id === control.toNodeId)?.name}” only when</div>
-      <Field label="Condition">
-        <select
-          value={kind}
-          onChange={(e) => {
-            const k = e.target.value;
-            if (k === 'always') apply(undefined);
-            if (k === 'verdict_is') apply({ kind: 'verdict_is', verdict: 'PASS' });
-            if (k === 'port_equals') apply({ kind: 'port_equals', port: sourcePorts[0] ?? 'decision', value: '' });
-            if (k === 'port_truthy') apply({ kind: 'port_truthy', port: sourcePorts[0] ?? 'decision' });
-          }}
-        >
-          <option value="always">Always</option>
+    <>
+      <Field label={nested ? 'This condition' : 'Condition'}>
+        <select value={kind} onChange={(e) => choose(e.target.value)}>
+          {!loop && !nested && <option value="always">Always</option>}
           <option value="verdict_is">The verdict is…</option>
           <option value="port_equals">An output equals…</option>
+          <option value="port_compare">An output compares to…</option>
           <option value="port_truthy">An output is set</option>
+          {!nested && <option value="all">All of these hold…</option>}
+          {!nested && <option value="any">Any of these holds…</option>}
+          {!loop && !nested && <option value="otherwise">Otherwise (no other branch matches)</option>}
         </select>
       </Field>
       {when?.kind === 'verdict_is' && (
         <Field label="Verdict">
-          <select value={when.verdict} onChange={(e) => apply({ ...when, verdict: e.target.value as AssessmentVerdict })}>
+          <select value={when.verdict} onChange={(e) => onChange({ ...when, verdict: e.target.value as AssessmentVerdict })}>
             {VERDICTS.map((v) => (
               <option key={v} value={v}>
                 {v}
@@ -669,22 +801,154 @@ function ConditionEditor({ props, edgeId }: { props: InspectorProps; edgeId: str
           </select>
         </Field>
       )}
-      {(when?.kind === 'port_equals' || when?.kind === 'port_truthy') && (
-        <Field label={`Output of “${source?.name ?? control.fromNodeId}”`}>
-          <select value={when.port} onChange={(e) => apply({ ...when, port: e.target.value })}>
-            {[...new Set([when.port, ...sourcePorts])].map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
+      {(when?.kind === 'port_equals' || when?.kind === 'port_truthy' || when?.kind === 'port_compare') &&
+        portSelect(when.port, (p) => onChange({ ...when, port: p }))}
       {when?.kind === 'port_equals' && (
-        <TextField label="Value" value={String(when.value ?? '')} onChange={(v) => apply({ ...when, value: v })} />
+        <TextField label="Value" value={String(when.value ?? '')} onChange={(v) => onChange({ ...when, value: v })} />
+      )}
+      {when?.kind === 'port_compare' && (
+        <>
+          <Field label="Compare">
+            <select value={when.measure ?? 'value'} onChange={(e) => onChange({ ...when, measure: e.target.value as 'value' | 'length' })}>
+              <option value="value">its value</option>
+              <option value="length">how many items (or characters) it has</option>
+            </select>
+          </Field>
+          <Field label="Is">
+            <select value={when.op} onChange={(e) => onChange({ ...when, op: e.target.value as (typeof COMPARE_OPS)[number]['value'] })}>
+              {COMPARE_OPS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <TextField label="Value" hint="numbers compare by size" value={String(when.value ?? '')} onChange={(v) => onChange({ ...when, value: conditionValue(v) })} />
+        </>
+      )}
+      {(when?.kind === 'all' || when?.kind === 'any') && (
+        <div className="condition-group">
+          {when.conditions.map((sub, index) => {
+            const replace = (next: EdgeCondition | undefined) =>
+              next && onChange({ ...when, conditions: when.conditions.map((c, i) => (i === index ? next : c)) });
+            const remove = () => onChange({ ...when, conditions: when.conditions.filter((_, i) => i !== index) });
+            return (
+              <div key={index} className="condition-item">
+                <div className="condition-item-head">
+                  <span>{index === 0 ? 'When' : when.kind === 'all' ? 'and' : 'or'}</span>
+                  <button type="button" className="icon-btn" aria-label="Remove this condition" disabled={when.conditions.length === 1} onClick={remove}>
+                    ×
+                  </button>
+                </div>
+                {sub.kind === 'all' || sub.kind === 'any' || sub.kind === 'verdict_in' || sub.kind === 'otherwise' || sub.kind === 'always' ? (
+                  <div className="popover-note">{conditionText(sub)}</div>
+                ) : (
+                  <ConditionFields when={sub} onChange={replace} ports={ports} sourceName={sourceName} loop={loop} nested />
+                )}
+              </div>
+            );
+          })}
+          <button type="button" className="btn" onClick={() => onChange({ ...when, conditions: [...when.conditions, leaf('port_compare')!] })}>
+            + Add condition
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ConditionEditor({ props, edgeId }: { props: InspectorProps; edgeId: string }) {
+  const control = findControlEdge(props.definition, edgeId, props.path);
+  const graph = graphAt(props.definition, props.path);
+  if (!control) {
+    return <div className="popover-note">This connection only carries data; the order comes from another path.</div>;
+  }
+  const source = graph.nodes.find((n) => n.id === control.fromNodeId);
+  const when = control.when;
+  const sourcePorts = source?.outputs.map((p) => p.name) ?? [];
+  const apply = (next: EdgeCondition | undefined) => props.onChange(setEdgeCondition(props.definition, control.id, next, props.path));
+  const loop = control.loop;
+  const targetName = graph.nodes.find((n) => n.id === control.toNodeId)?.name;
+
+  return (
+    <section className="inspector-section">
+      <div className="section-title">{loop ? `Go back to “${targetName}” while` : `Run “${targetName}” only when`}</div>
+      <ConditionFields
+        when={when}
+        onChange={apply}
+        ports={sourcePorts}
+        sourceName={source?.name ?? control.fromNodeId}
+        loop={!!loop}
+      />
+      {loop && (
+        <>
+          <TextField
+            label="Max rounds"
+            hint="the first round included"
+            value={String(loop.maxRounds)}
+            onChange={(v) =>
+              /^\d+$/.test(v) &&
+              Number(v) >= 1 &&
+              Number(v) <= 50 &&
+              props.onChange(updateLoopBack(props.definition, control.id, { maxRounds: Number(v) }, props.path), `${control.id}:max`)
+            }
+          />
+          <Field label="After the last round">
+            <select
+              value={loop.onExhausted}
+              onChange={(e) =>
+                props.onChange(
+                  updateLoopBack(props.definition, control.id, { onExhausted: e.target.value as NonNullable<typeof loop>['onExhausted'] }, props.path)
+                )
+              }
+            >
+              {EXHAUSTED.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </>
       )}
     </section>
   );
+}
+
+function ParameterDependency({ props, edgeId }: { props: InspectorProps; edgeId: string }) {
+  const graph = graphAt(props.definition, props.path);
+  const edge = graph.dataEdges.find(edge => edge.id === edgeId);
+  if (!edge) return null;
+  const name = (id: string) => graph.nodes.find(node => node.id === id)?.name ?? id;
+  const path = findExecutionPath(graph, edge.fromNodeId, edge.toNodeId);
+  let explanation: string;
+  if (edge.fromNodeId === INPUTS_NODE_ID) explanation = 'This value comes from the workflow or enclosing scope input. No step execution dependency is added.';
+  else if (edge.toNodeId === OUTPUTS_NODE_ID) explanation = 'This publishes a workflow or scope output. There is no downstream step to schedule.';
+  else if (!edge.required && findExecutionPath(graph, edge.toNodeId, edge.fromNodeId)) explanation = 'Previous-round value: absent in the first round. This parameter does not add a forward execution dependency.';
+  else if (path?.length) explanation = 'The execution path below orders these steps. Its branch conditions still apply; connecting a parameter does not bypass them.';
+  else explanation = edge.required
+    ? `This required parameter waits for “${name(edge.fromNodeId)}” to succeed. There is no explicit execution path between these steps.`
+    : 'This parameter is optional. There is no execution path between these steps.';
+  return <section className="inspector-section connection-explanation">
+    <div className="section-title">Execution dependency</div>
+    <p>{explanation}</p>
+    {!!path?.length && <ul>{path.map(edge => <li key={edge.id}>{name(edge.fromNodeId)} → {name(edge.toNodeId)} · {describeCondition(edge.when) ?? 'after success'}</li>)}</ul>}
+    <p>Parameters pass values. Edit execution conditions by selecting an execution line.</p>
+  </section>;
+}
+
+function NodeDependencies({ props, nodeId }: { props: InspectorProps; nodeId: string }) {
+  const graph = graphAt(props.definition, props.path);
+  const name = (id: string) => id === INPUTS_NODE_ID ? 'Workflow / scope input' : graph.nodes.find(node => node.id === id)?.name ?? id;
+  const execution = graph.controlEdges.filter(edge => edge.toNodeId === nodeId && !edge.loop);
+  const parameters = graph.dataEdges.filter(edge => edge.toNodeId === nodeId);
+  return <section className="inspector-section connection-explanation">
+    <div className="section-title">Execution prerequisites</div>
+    <p>{execution.length ? 'Waits for these predecessors to settle. At least one execution branch must match.' : 'No incoming execution line. Required parameter sources still need to succeed.'}</p>
+    {!!execution.length && <ul>{execution.map(edge => <li key={edge.id}>{name(edge.fromNodeId)} · {describeCondition(edge.when) ?? 'after success'}</li>)}</ul>}
+    <div className="section-title">Parameter sources</div>
+    {parameters.length ? <ul>{parameters.map(edge => <li key={edge.id}>{edge.toPort} ← {name(edge.fromNodeId)}.{edge.fromPort} · {edge.required ? 'required' : 'optional / previous round'}</li>)}</ul> : <p>No parameter connections.</p>}
+  </section>;
 }
 
 /** Right-hand editor for the selected node, connection, or the workflow itself. */
@@ -714,7 +978,7 @@ export function Inspector(props: InspectorProps) {
             label="Supervise runs"
             desc="Steps in when a step fails, loops stall or an agent asks a question; never changes what counts as done"
             checked={!!chief}
-            onChange={(on) => props.onChange(updateWorkflowMeta(definition, { chief: on ? ChiefPolicySchema.parse({ maxLevel: 'escalate' }) : null }))}
+            onChange={(on) => props.onChange(updateWorkflowMeta(definition, { chief: on ? ChiefPolicySchema.parse({}) : null }))}
           />
           {chief && (
             <>
@@ -729,7 +993,7 @@ export function Inspector(props: InspectorProps) {
                     )
                   }
                 >
-                  <option value="">Default supervisor</option>
+                  <option value="">Default chief (on the engine this flow's agents use)</option>
                   {props.agents.map((a) => (
                     <option key={a.agentId} value={a.agentId}>
                       {a.name}
@@ -760,7 +1024,7 @@ export function Inspector(props: InspectorProps) {
     const control = graph.controlEdges.find((e) => e.id === target.edgeId);
     const name = (id: string) =>
       id === INPUTS_NODE_ID ? 'Inputs' : id === OUTPUTS_NODE_ID ? 'Outputs' : (graph.nodes.find((n) => n.id === id)?.name ?? id);
-    title = data ? 'Data connection' : 'Order connection';
+    title = control?.loop ? 'Execution loop-back' : data ? 'Parameter connection' : 'Execution connection';
     body = (
       <>
         <div className="inspector-summary">
@@ -770,10 +1034,18 @@ export function Inspector(props: InspectorProps) {
               ? `${name(control.fromNodeId)}  →  ${name(control.toNodeId)}`
               : 'This connection no longer exists.'}
         </div>
-        {(data || control) && <ConditionEditor props={props} edgeId={target.edgeId} />}
+        {data && <ParameterDependency props={props} edgeId={target.edgeId} />}
+        {control && <>
+          <div className="connection-explanation"><p>This line controls when the next step can run. Parameter bindings are shown separately.</p>
+            {graph.dataEdges.some(edge => edge.fromNodeId === control.fromNodeId && edge.toNodeId === control.toNodeId) && <p>These steps also have parameter bindings. Their execution dependency is shown here, including dependencies added when parameters were connected.</p>}
+          </div>
+          <ConditionEditor props={props} edgeId={target.edgeId} />
+        </>}
       </>
     );
     footer = (data || control) && (
+      <>
+      <div className="connection-explanation"><p>{data ? 'Deleting this parameter connection keeps the execution lines.' : 'Deleting this execution line keeps the parameter bindings and any required-input dependencies.'}</p></div>
       <button
         type="button"
         className="btn btn-danger"
@@ -782,8 +1054,9 @@ export function Inspector(props: InspectorProps) {
           props.onClose();
         }}
       >
-        Delete connection <span className="kbd">⌫</span>
+        Delete {data ? 'parameter' : 'execution'} connection <span className="kbd">⌫</span>
       </button>
+      </>
     );
   } else if (target.nodeId === INPUTS_NODE_ID || target.nodeId === OUTPUTS_NODE_ID) {
     const isInputs = target.nodeId === INPUTS_NODE_ID;
@@ -813,7 +1086,7 @@ export function Inspector(props: InspectorProps) {
     if (!node) {
       title = 'Step removed';
     } else {
-      title = { agent: 'Agent task', script: 'Script', gate: 'Human decision', loop: 'Loop', parallel: 'Parallel' }[node.kind];
+      title = { agent: 'Agent task', script: 'Script', gate: 'Human decision', subflow: 'Sub-flow', loop: 'Loop', parallel: 'Parallel' }[node.kind];
       const nodeIssues = props.issues.filter((i) => i.nodeId === node.id && i.scopePath === compilerScopePath(path));
       body = (
         <>
@@ -830,8 +1103,14 @@ export function Inspector(props: InspectorProps) {
           ) : (
             <NodeFields node={node} props={props} />
           )}
-          <PortsEditor title="Inputs" definition={definition} path={path} nodeId={node.id} side="in" onChange={props.onChange} onError={props.onError} />
-          <PortsEditor title="Outputs" definition={definition} path={path} nodeId={node.id} side="out" onChange={props.onChange} onError={props.onError} />
+          <NodeDependencies props={props} nodeId={node.id} />
+          {/* A sub-flow step's fields are its workflow's. */}
+          {node.kind !== 'subflow' && (
+            <>
+              <PortsEditor title="Inputs" definition={definition} path={path} nodeId={node.id} side="in" onChange={props.onChange} onError={props.onError} />
+              <PortsEditor title="Outputs" definition={definition} path={path} nodeId={node.id} side="out" onChange={props.onChange} onError={props.onError} />
+            </>
+          )}
         </>
       );
       footer = (

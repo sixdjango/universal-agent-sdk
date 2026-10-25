@@ -323,3 +323,6 @@ export {
 // Unified Message & Turn History Materializer
 export * from './history';
 
+// Optional durable chat runtime; independent of Flow and HTTP hosts.
+export * from './conversation';
+

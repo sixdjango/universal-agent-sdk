@@ -1,10 +1,12 @@
 import type {
   AssessmentFinding,
   AssessmentVerdict,
+  LiveAttemptProgress,
   WaitRequest,
   WorkflowDefinition,
   WorkflowNode,
 } from '@universal-agent/workflow-contract';
+import { subflowWorkflowId } from '@universal-agent/workflow-contract';
 import {
   computeScopeReadyNodeIds,
   type GraphScopeState,
@@ -12,6 +14,7 @@ import {
   type WorkflowRunState,
 } from '@universal-agent/workflow-runtime';
 import { compilePlan, containerInstanceKeys } from './canvas';
+import { buildNodeThinkingTrace, type ThinkingTraceModel } from './thinking';
 
 export type TraceSpanStatus = 'running' | 'waiting' | 'done' | 'failed';
 
@@ -59,6 +62,11 @@ export interface TraceSpan {
   readonly pendingWait?: WaitRequest;
   readonly rerunnable?: boolean;
   readonly isSlowest?: boolean;
+  readonly thinking?: ThinkingTraceModel;
+  /** Actual Agent node span; artifact/assessment child spans do not own executions. */
+  readonly hasConversation?: boolean;
+  /** One authored node with independently inspectable item executions. */
+  readonly parallelBatch?: boolean;
   readonly children: readonly TraceSpan[];
   readonly segments: readonly TraceSegment[];
 }
@@ -191,6 +199,7 @@ function spanColorForKind(
 export function buildTraceModel(input: {
   readonly run: WorkflowRunState;
   readonly runActive?: boolean;
+  readonly liveProgress?: readonly LiveAttemptProgress[];
   readonly agentNames?: Readonly<Record<string, string>>;
   readonly nowMs?: number;
 }): TraceModel {
@@ -241,10 +250,14 @@ export function buildTraceModel(input: {
     if (node.kind === 'gate') {
       return 'Human decision';
     }
+    const runsWorkflow = subflowWorkflowId(node);
+    if (runsWorkflow) {
+      return `Sub-flow · ${runsWorkflow}`;
+    }
     if (node.kind === 'loop') {
       return `Up to ${node.maxRounds} rounds`;
     }
-    return `Parallel · max ${node.maxConcurrency}`;
+    return node.kind === 'parallel' ? `Parallel · max ${node.maxConcurrency}` : 'Sub-flow';
   };
 
   const buildAttemptChildren = (
@@ -399,13 +412,23 @@ export function buildTraceModel(input: {
           const iInTokens = childNodeSpans.reduce((s, c) => s + (c.inputTokens ?? 0), 0);
           const iOutTokens = childNodeSpans.reduce((s, c) => s + (c.outputTokens ?? 0), 0);
           const label = node.kind === 'loop' ? `Round ${idx + 1}` : `Item ${idx + 1}`;
+          const itemPreview =
+            node.kind === 'parallel' && instScope?.inputs[node.itemsPort]
+              ? summarizeValue(instScope.inputs[node.itemsPort]!.value, 40)
+              : undefined;
+          const singleChildThinking =
+            childNodeSpans.length === 1 ? childNodeSpans[0]!.thinking : undefined;
+          if (node.kind === 'parallel' && node.origin && childNodeSpans.length === 1) {
+            instanceSpans.push({ ...childNodeSpans[0]!, title: `${node.name} · ${label}`, subtitle: itemPreview ?? childNodeSpans[0]!.subtitle });
+            return;
+          }
           instanceSpans.push({
             id: `scope:${instKey}`,
             nodeId: node.id,
             scopeKey: instKey,
             kind: node.kind,
             title: `${node.name} · ${label}`,
-            subtitle: describeAgent(node),
+            subtitle: itemPreview ? `${itemPreview} · ${describeAgent(node)}` : describeAgent(node),
             status: iStatus,
             color: spanColorForKind(node.kind, iStatus),
             startMs: iStart,
@@ -419,6 +442,7 @@ export function buildTraceModel(input: {
             ...(iOutTokens > 0 ? { outputTokens: iOutTokens } : {}),
             inputPreview: summarizeRecord(instScope?.inputs),
             outputPreview: summarizeRecord(instScope?.outputs),
+            ...(singleChildThinking ? { thinking: singleChildThinking } : {}),
             children: childNodeSpans,
             segments: childNodeSpans.map((c) => ({
               id: c.id,
@@ -454,13 +478,17 @@ export function buildTraceModel(input: {
             id: `node:${scopeKey}:${node.id}`,
             nodeId: node.id,
             scopeKey,
-            kind: node.kind,
+            kind: node.kind === 'parallel' && node.origin ? (node.origin.nodeKind === 'subflow' ? 'loop' : node.origin.nodeKind) : node.kind,
+            ...(node.kind === 'parallel' && node.origin ? { parallelBatch: true } : {}),
             title: node.name,
             subtitle:
               node.kind === 'loop'
                 ? `${instanceSpans.length} rounds`
                 : `${instanceSpans.length} parallel items`,
             status: cStatus,
+            rerunnable: !isLive,
+            ...(nodeState?.error ? { error: nodeState.error } : {}),
+            outputPreview: summarizeRecord(nodeState?.outputs),
             color: spanColorForKind(node.kind, cStatus),
             startMs: cStart,
             endMs: cEnd,
@@ -476,6 +504,15 @@ export function buildTraceModel(input: {
               widthPct: c.widthPct,
               color: c.color,
             })),
+          });
+        } else if (node.kind === 'parallel' && node.origin) {
+          const status: TraceSpanStatus = nodeState?.status === 'FAILED' ? 'failed' : nodeState?.status === 'SUCCEEDED' ? 'done' : 'running';
+          spans.push({ id: `node:${scopeKey}:${node.id}`, nodeId: node.id, scopeKey,
+            kind: node.origin.nodeKind === 'subflow' ? 'loop' : node.origin.nodeKind, parallelBatch: true,
+            title: node.name, subtitle: '0 parallel items', status, color: spanColorForKind('parallel', status),
+            startMs, endMs: startMs, durationMs: 0, startOffsetMs: 0, startPct: 0, widthPct: 0,
+            outputPreview: summarizeRecord(nodeState?.outputs), ...(nodeState?.error ? { error: nodeState.error } : {}),
+            rerunnable: !isLive, children: [], segments: [],
           });
         }
         continue;
@@ -538,10 +575,17 @@ export function buildTraceModel(input: {
 
       if (nodeAttempts.length === 0 && isCurrentlyRunning) {
         // Node is actively executing right now (before its first attempt record is committed)
-        const activeStartMs = maxObservedMs;
+        const live = input.liveProgress?.find((p) => p.scopeKey === scopeKey && p.nodeId === nodeId);
+        const activeStartMs = live?.startedAtMs ?? maxObservedMs;
         const activeEndMs = Math.max(endMs, activeStartMs + 200);
+        const thinking = buildNodeThinkingTrace({
+          node,
+          status: 'running',
+          ...(live ? { live } : {}),
+        });
         spans.push({
           id: `running:${scopeKey}:${node.id}`,
+          ...(node.kind === 'agent' ? { hasConversation: true } : {}),
           nodeId: node.id,
           scopeKey,
           kind: node.kind === 'agent' ? 'agent' : 'script',
@@ -556,6 +600,7 @@ export function buildTraceModel(input: {
           startPct: toPct(activeStartMs),
           widthPct: toWidthPct(activeStartMs, activeEndMs),
           inputPreview: summarizeRecord(scopeState?.inputs),
+          ...(thinking ? { thinking } : {}),
           children: [],
           segments: [],
         });
@@ -564,6 +609,7 @@ export function buildTraceModel(input: {
 
       // Build span from attempts
       const latestAttempt = nodeAttempts[nodeAttempts.length - 1]!;
+      const live = input.liveProgress?.find((p) => p.scopeKey === scopeKey && p.nodeId === nodeId);
       const firstStart = nodeAttempts[0]!.startedAtMs;
       const lastEnd = isCurrentlyRunning
         ? endMs
@@ -571,6 +617,10 @@ export function buildTraceModel(input: {
       const assessment = latestAttempt.assessmentId
         ? run.assessments[latestAttempt.assessmentId]
         : undefined;
+      const manifest = latestAttempt.contextManifestId
+        ? run.manifests[latestAttempt.contextManifestId]
+        : undefined;
+      const readReceipts = run.readReceipts.filter((r) => r.attemptId === latestAttempt.attemptId);
       const verdict = assessment?.verdict ?? nodeState?.latestVerdict;
       const spanStatus: TraceSpanStatus = isCurrentlyRunning
         ? 'running'
@@ -582,6 +632,22 @@ export function buildTraceModel(input: {
               verdict === 'BLOCKED'
             ? 'failed'
             : 'done';
+      const thinking = buildNodeThinkingTrace({
+        node,
+        status:
+          spanStatus === 'running'
+            ? 'running'
+            : spanStatus === 'waiting'
+              ? 'waiting'
+              : spanStatus === 'failed'
+                ? 'failed'
+                : 'succeeded',
+        attempt: latestAttempt,
+        ...(live ? { live } : {}),
+        ...(manifest ? { manifest } : {}),
+        ...(assessment ? { assessment } : {}),
+        readReceipts,
+      });
 
       const costUsd = nodeAttempts.reduce((sum, a) => sum + (a.receipt?.totalCostUsd ?? 0), 0);
       const inputTokens = nodeAttempts.reduce((sum, a) => sum + (a.receipt?.inputTokens ?? 0), 0);
@@ -601,6 +667,7 @@ export function buildTraceModel(input: {
 
       spans.push({
         id: `node:${scopeKey}:${node.id}`,
+        ...(node.kind === 'agent' ? { hasConversation: true } : {}),
         nodeId: node.id,
         scopeKey,
         kind: spanKind,
@@ -641,6 +708,7 @@ export function buildTraceModel(input: {
           : {}),
         ...(latestAttempt.changes ? { changes: latestAttempt.changes } : {}),
         ...(pendingWait ? { pendingWait } : {}),
+        ...(thinking ? { thinking } : {}),
         rerunnable:
           settled &&
           scopeKey === '$root' &&
@@ -667,7 +735,7 @@ export function buildTraceModel(input: {
   const candidateLeafSpans: TraceSpan[] = [];
   const collectCandidates = (list: readonly TraceSpan[]) => {
     for (const s of list) {
-      if (s.kind === 'loop' || s.kind === 'parallel') {
+      if (s.kind === 'loop' || s.kind === 'parallel' || s.parallelBatch) {
         collectCandidates(s.children);
       } else if (s.status === 'done' && s.durationMs > 0) {
         candidateLeafSpans.push(s);

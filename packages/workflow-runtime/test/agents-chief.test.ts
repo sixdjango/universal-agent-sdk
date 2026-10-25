@@ -4,6 +4,7 @@ import {
   ChiefPolicySchema,
   createBoundedFixLoopFlow,
   createWorkflowBuilder,
+  DEFAULT_CHIEF_AGENT_REF,
   type WorkflowDefinition,
 } from '@universal-agent/workflow-contract';
 import { describe, expect, it } from 'vitest';
@@ -270,6 +271,47 @@ describe('chief agent', () => {
     expect(done.chief.interventionCount).toBe(1);
     expect(Object.keys(done.pinnedAgents).sort()).toEqual(['junior', 'lead', 'senior']);
     expect(foldRunLog(await store.readLog(done.runId))).toEqual(done);
+  });
+
+  it('plays the built-in chief on the engine most of the flow runs on when the policy names no agent', async () => {
+    const chief = new ScriptedChief((input) =>
+      input.trigger.kind === 'node.failed'
+        ? { rationale: 'Hand it to senior', commands: [{ kind: 'swap_agent', nodeId: 'worker', agentRef: 'senior' }, { kind: 'retry_node', scopeKey: '$root', nodeId: 'worker' }] }
+        : { rationale: '', commands: [] }
+    );
+    const engines = new InMemoryAgentRegistry([
+      { id: 'junior', name: 'Junior', charter: 'Learning.', runtime: { adapter: 'acp', agentType: 'deepseek', modelId: 'flash', modeId: 'agent' } },
+      { id: 'senior', name: 'Senior', charter: 'Experienced.', runtime: { adapter: 'acp', agentType: 'claude' } },
+    ]);
+    const workerFails = async (req: AgentExecutionRequest): Promise<AgentExecutionResult> =>
+      req.node.id === 'worker' ? juniorFailsSeniorSucceeds(req) : { status: 'COMPLETED' };
+    const { runtime, store } = makeRuntime({ registry: engines, chief, executeAgent: workerFails });
+    const definition = createWorkflowBuilder('engines')
+      .addWorkflowOutput({ name: 'result', type: 'string', required: true })
+      .addAgent({ id: 'worker', name: 'Worker', role: 'worker', agentRef: 'junior', goal: 'Do it', outputs: [{ name: 'result', type: 'string', required: true }] })
+      .addAgent({ id: 'check', name: 'Check', role: 'worker', agentRef: 'junior', goal: 'Check it' })
+      .addAgent({ id: 'other', name: 'Other', role: 'worker', agentRef: 'senior', goal: 'Something else' })
+      .connectData({ fromNodeId: 'worker', fromPort: 'result', toNodeId: '$output', toPort: 'result' })
+      .setChief({})
+      .buildDefinition();
+
+    const done = await runToEnd(runtime, definition);
+    expect(done.status).toBe('SUCCEEDED');
+    const played = chief.seen[0]?.chiefAgent;
+    expect(played?.ref).toBe(DEFAULT_CHIEF_AGENT_REF);
+    expect(played?.profile.name).toBe('Default chief');
+    // Two steps run on deepseek, one on claude; the step's mode is not carried over.
+    expect(played?.profile.runtime).toEqual({ adapter: 'acp', agentType: 'deepseek', modelId: 'flash' });
+    expect(done.pinnedAgents[DEFAULT_CHIEF_AGENT_REF]?.digest).toBe(played?.digest);
+    expect(foldRunLog(await store.readLog(done.runId))).toEqual(done);
+  });
+
+  it('leaves the chief to the host default agent when no step names an engine', async () => {
+    const chief = new ScriptedChief(() => ({ rationale: '', commands: [] }));
+    const { runtime } = makeRuntime({ chief, executeAgent: async () => { throw new Error('stuck'); } });
+    await runToEnd(runtime, singleAgentFlow({ chief: {} }));
+    expect(chief.seen.length).toBeGreaterThan(0);
+    expect(chief.seen[0]?.chiefAgent).toBeUndefined();
   });
 
   it('rejects commands above the policy level and never touches what counts as done', async () => {

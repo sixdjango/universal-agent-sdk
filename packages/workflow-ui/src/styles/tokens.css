@@ -1,20 +1,40 @@
-/* Design tokens (colors, radii, fonts, easing). Override these to theme the components. */
+/* Design tokens (colors, radii, fonts, easing). Supports both dark and light themes. */
 
-:root {
+:root,
+[data-theme='dark'] {
   color-scheme: dark;
   --bg: #0f0f10;
   --dot: #2a2a2d;
   --card: #18181a;
   --card-raised: #1c1c1f;
+  --card-io: #141518;
   --row: #202023;
   --row-hover: #26262a;
   --border: #29292d;
   --border-strong: #3a3a3f;
+  --border-focus: #5a5a60;
   --text: #ececee;
   --text-2: #9a9aa0;
   --text-3: #66666c;
+  --on-primary: #111113;
+  --primary-hover: #ffffff;
   --edge: #3d3d42;
+  --execution-edge: #a5b4fc;
+  --parameter-edge: #5dbdb1;
   --edge-delivered: #75757c;
+  --edge-flowing: #8d8d94;
+  --edge-skipped: #333337;
+  --comet: #ffffff;
+  --comet-glow: rgba(255, 255, 255, 0.9);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --shadow-dock: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --shadow-trace: 0 22px 60px rgba(0, 0, 0, 0.42);
+  --deck-loop-bg: #191722;
+  --deck-parallel-bg: #1d1622;
+  --script-surface: #15171a;
+  --user-bubble: #2c2c31;
+  --shimmer-peak: #ffffff;
   --danger: #e5484d;
   --danger-soft: rgba(229, 72, 77, 0.1);
   --danger-border: rgba(229, 72, 77, 0.55);
@@ -28,4 +48,94 @@
   --font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --dot: #d4d8e1;
+  --card: #ffffff;
+  --card-raised: #ffffff;
+  --card-io: #f0f2f6;
+  --row: #f2f4f7;
+  --row-hover: #e8ebf0;
+  --border: #e1e4ec;
+  --border-strong: #cdd2de;
+  --border-focus: #8690a3;
+  --text: #14161c;
+  --text-2: #596070;
+  --text-3: #878f9f;
+  --on-primary: #ffffff;
+  --primary-hover: #262932;
+  --edge: #c2c8d4;
+  --execution-edge: #6366b5;
+  --parameter-edge: #287f77;
+  --edge-delivered: #687082;
+  --edge-flowing: #475569;
+  --edge-skipped: #d4d8e2;
+  --comet: #2563eb;
+  --comet-glow: rgba(37, 99, 235, 0.5);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 6px 20px rgba(15, 23, 42, 0.065);
+  --shadow-pop: 0 16px 40px rgba(15, 23, 42, 0.13);
+  --shadow-dock: 0 10px 28px rgba(15, 23, 42, 0.1);
+  --shadow-trace: 0 16px 44px rgba(15, 23, 42, 0.085);
+  --deck-loop-bg: #f3f0ff;
+  --deck-parallel-bg: #fdf2f8;
+  --script-surface: #f3f6f9;
+  --user-bubble: #e6e9f1;
+  --shimmer-peak: #2563eb;
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.08);
+  --danger-border: rgba(220, 38, 38, 0.38);
+  --warn: #d97706;
+  --warn-soft: rgba(217, 119, 6, 0.09);
+  --warn-border: rgba(217, 119, 6, 0.38);
+  --ok: #16a34a;
+  --ok-soft: rgba(22, 163, 74, 0.1);
+  --active: #2563eb;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --bg: #f5f6f8;
+    --dot: #d4d8e1;
+    --card: #ffffff;
+    --card-raised: #ffffff;
+    --card-io: #f0f2f6;
+    --row: #f2f4f7;
+    --row-hover: #e8ebf0;
+    --border: #e1e4ec;
+    --border-strong: #cdd2de;
+    --border-focus: #8690a3;
+    --text: #14161c;
+    --text-2: #596070;
+    --text-3: #878f9f;
+    --on-primary: #ffffff;
+    --primary-hover: #262932;
+    --edge: #c2c8d4;
+    --edge-delivered: #687082;
+    --edge-flowing: #475569;
+    --edge-skipped: #d4d8e2;
+    --comet: #2563eb;
+    --comet-glow: rgba(37, 99, 235, 0.5);
+    --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 6px 20px rgba(15, 23, 42, 0.065);
+    --shadow-pop: 0 16px 40px rgba(15, 23, 42, 0.13);
+    --shadow-dock: 0 10px 28px rgba(15, 23, 42, 0.1);
+    --shadow-trace: 0 16px 44px rgba(15, 23, 42, 0.085);
+    --deck-loop-bg: #f3f0ff;
+    --deck-parallel-bg: #fdf2f8;
+    --script-surface: #f3f6f9;
+    --user-bubble: #e6e9f1;
+    --shimmer-peak: #2563eb;
+    --danger: #dc2626;
+    --danger-soft: rgba(220, 38, 38, 0.08);
+    --danger-border: rgba(220, 38, 38, 0.38);
+    --warn: #d97706;
+    --warn-soft: rgba(217, 119, 6, 0.09);
+    --warn-border: rgba(217, 119, 6, 0.38);
+    --ok: #16a34a;
+    --ok-soft: rgba(22, 163, 74, 0.1);
+    --active: #2563eb;
+  }
 }

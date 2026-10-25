@@ -61,22 +61,23 @@
 .btn-primary {
   background: var(--text);
   border-color: var(--text);
-  color: #111;
+  color: var(--on-primary);
   font-weight: 500;
 }
 
 .btn-primary:hover {
-  background: #fff;
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 
 .kbd {
   margin-left: 6px;
   padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.12);
+  background: rgba(128, 128, 138, 0.18);
   font-size: 11px;
   color: inherit;
-  opacity: 0.6;
+  opacity: 0.75;
 }
 
 /* ---------------------------------------------------------------- menus & popovers */
@@ -89,7 +90,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--card-raised);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-pop);
   animation: pop-in 0.16s var(--ease) both;
 }
 
@@ -180,7 +181,7 @@ input[type='text'] {
 
 textarea:focus,
 input[type='text']:focus {
-  border-color: #5a5a60;
+  border-color: var(--border-focus);
 }
 
 .icon-btn {
@@ -255,4 +256,14 @@ select {
   width: calc(100% - 16px);
   margin: 2px 8px 6px;
   height: 34px;
+}
+
+/* Stops a run for good, so it reads as a destructive action. */
+.btn.btn-stop {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.btn.btn-stop:hover {
+  background: var(--danger-soft);
 }

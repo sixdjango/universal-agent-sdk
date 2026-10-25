@@ -17,12 +17,18 @@ export interface CanvasActions {
   assignAgent(nodeId: string, agentRef: string, runtime: RuntimeChoice): Promise<void>;
   refreshRuntime(agentType: string): Promise<void>;
   answer(wait: WaitRequest, answer: string): Promise<void>;
-  rerun(nodeId: string): Promise<void>;
+  rerun(nodeId: string, scopeKey?: string): Promise<void>;
   openArtifact(artifactId: string, title: string): void;
   inspectNode(nodeId: string): void;
   /** Shows a loop body / parallel item graph in place of the current one. */
-  openScope(nodeId: string): void;
+  openScope(nodeId: string, itemIndex?: number): void;
   addPort(nodeId: string, side: PortSide): void;
+  /** Run view: which round of a loop drawn as a cycle to show (index into its rounds). */
+  chooseLoopRound?(loopId: string, index: number): void;
+  /** Design view: opens the saved workflow a sub-flow step runs. */
+  openWorkflow?(workflowId: string): void;
+  /** Design view: turns a loop container into steps on the canvas with a way back from the deciding step. */
+  expandLoop?(loopId: string): void;
 }
 
 export const CanvasActionsContext = createContext<CanvasActions | null>(null);

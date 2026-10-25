@@ -139,6 +139,7 @@ function normalizeNode(node: WorkflowNode): WorkflowNode {
     return {
       ...base,
       kind: 'loop',
+      origin: node.origin,
       maxRounds: node.maxRounds,
       continueWhen: node.continueWhen,
       onExhausted: node.onExhausted,
@@ -149,6 +150,7 @@ function normalizeNode(node: WorkflowNode): WorkflowNode {
     return {
       ...base,
       kind: 'parallel',
+      origin: node.origin,
       itemsPort: node.itemsPort,
       maxConcurrency: node.maxConcurrency,
       failurePolicy: node.failurePolicy,

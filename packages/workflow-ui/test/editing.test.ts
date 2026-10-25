@@ -29,12 +29,18 @@ function buildDraft(): { definition: WorkflowDefinition; author: string; reviewe
   definition = updateNode(r.definition, r.nodeId, { name: 'Review', producesAssessment: true, outputs: [] });
   // Input field -> author: dropping on the "+" row creates the author's input port.
   definition = ok(connect(definition, { source: '$input', sourceHandle: 'out:request', target: a.nodeId, targetHandle: 'in:+' })).definition;
-  // Author result -> reviewer header: also creates the port and orders reviewer after author.
-  definition = ok(connect(definition, { source: a.nodeId, sourceHandle: 'out:result', target: r.nodeId, targetHandle: 'ctrl-in' })).definition;
+  // Author result -> reviewer "+ input": creates the port and orders reviewer after author.
+  definition = ok(connect(definition, { source: a.nodeId, sourceHandle: 'out:result', target: r.nodeId, targetHandle: 'in:+' })).definition;
   return { definition, author: a.nodeId, reviewer: r.nodeId };
 }
 
 describe('editor operations', () => {
+  it('supervises new workflows with the default chief, allowed to operate', () => {
+    const chief = createBlankWorkflow('Fresh', []).chief;
+    expect(chief?.agentRef).toBeUndefined();
+    expect(chief?.maxLevel).toBe('operate');
+  });
+
   it('builds a workflow from scratch that the contract compiler accepts', () => {
     const { definition, author, reviewer } = buildDraft();
 

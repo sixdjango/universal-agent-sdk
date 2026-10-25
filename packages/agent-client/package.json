@@ -18,6 +18,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./conversation": {
+      "ua-source": "./src/conversation-view.ts",
+      "types": "./dist/conversation-view.d.ts",
+      "import": "./dist/conversation-view.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"

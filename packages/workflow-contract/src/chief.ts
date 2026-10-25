@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { type AgentProfile, AgentProfileSchema, type AgentRuntimeBinding } from './agent';
 
 /**
  * Ordered intervention levels for the chief agent, least to most invasive. A policy's
@@ -50,6 +51,37 @@ export const ChiefPolicySchema = z.object({
 });
 export type ChiefPolicy = z.infer<typeof ChiefPolicySchema>;
 export type ChiefPolicyInput = z.input<typeof ChiefPolicySchema>;
+
+/** Ref the built-in chief is pinned under in runs whose policy names no agent. */
+export const DEFAULT_CHIEF_AGENT_REF = 'default-chief@builtin';
+
+/**
+ * The chief of runs whose policy names no agent: a read-only supervisor on `runtime`, the
+ * engine the workflow's own agents run on (so it needs no setup of its own).
+ */
+export function defaultChiefProfile(runtime: AgentRuntimeBinding): AgentProfile {
+  const [id, version] = DEFAULT_CHIEF_AGENT_REF.split('@') as [string, string];
+  return AgentProfileSchema.parse({
+    id,
+    version,
+    name: 'Default chief',
+    charter:
+      'Supervises workflow runs: works out why a step failed or stalled from what the run produced, and keeps the run moving with the smallest intervention that fits.',
+    instructions: [
+      'Never edit files or run anything that changes the workspace; read what steps produced with the ua-workflow tools.',
+      'Prefer guidance and a retry of the failing step before rerunning earlier steps or swapping agents.',
+      'Give the exact scopeKey in every command that takes one.',
+      'Never change what counts as done: acceptance criteria and verdicts stay as they are.',
+      'Escalate to a human when the fix needs a decision only they can make.',
+    ],
+    runtime: {
+      adapter: runtime.adapter,
+      ...(runtime.agentType ? { agentType: runtime.agentType } : {}),
+      ...(runtime.modelId ? { modelId: runtime.modelId } : {}),
+      ...(runtime.effort ? { effort: runtime.effort } : {}),
+    },
+  });
+}
 
 /**
  * Everything the chief may do. By design there is no command to edit acceptance criteria,

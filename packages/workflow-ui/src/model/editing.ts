@@ -9,6 +9,7 @@ import type {
   WorkflowGraph,
   WorkflowNode,
 } from '@universal-agent/workflow-contract';
+import { ChiefPolicySchema, nodeParallel } from '@universal-agent/workflow-contract';
 import {
   containerAt,
   graphAt,
@@ -26,7 +27,7 @@ import {
  * Validity is not enforced here; the contract compiler reports issues on the whole draft.
  */
 
-export type NewNodeKind = 'agent' | 'script' | 'gate' | 'loop' | 'parallel';
+export type NewNodeKind = 'agent' | 'script' | 'gate' | 'subflow' | 'loop' | 'parallel';
 /** Canvas side of a port: `in` rows accept edges (left handle), `out` rows emit them (right). */
 export type PortSide = 'in' | 'out';
 
@@ -73,6 +74,8 @@ export function createBlankWorkflow(name: string, takenIds: Iterable<string>): W
     outputs: [],
     graph: { nodes: [], controlEdges: [], dataEdges: [] },
     workspaces: [],
+    // Supervised by the default chief unless turned off.
+    chief: ChiefPolicySchema.parse({}),
   };
 }
 
@@ -166,7 +169,7 @@ function parallelTemplate(id: string): WorkflowNode {
       nodes: [agentTemplate('worker', 'Handle one item', { inputs: [{ name: 'item', type: 'json', required: true }] } as Partial<WorkflowNode>)],
       controlEdges: [],
       dataEdges: [
-        { id: 'data_$input.item_to_worker.item', fromNodeId: INPUTS_NODE_ID, fromPort: 'item', toNodeId: 'worker', toPort: 'item', required: true, delivery: 'auto' },
+        { id: 'data_$input.items_to_worker.item', fromNodeId: INPUTS_NODE_ID, fromPort: 'items', toNodeId: 'worker', toPort: 'item', required: true, delivery: 'auto' },
         { id: 'data_worker.result_to_$output.results', fromNodeId: 'worker', fromPort: 'result', toNodeId: OUTPUTS_NODE_ID, toPort: 'results', required: true, delivery: 'auto' },
       ],
     },
@@ -210,6 +213,8 @@ export function addNode(
       inputs: [],
       outputs: [{ name: 'decision', type: 'string', required: true }],
     };
+  } else if (kind === 'subflow') {
+    node = { ...BASE, kind: 'subflow', id: uniqueName('subflow', taken), name: 'Sub-flow', inputs: [], outputs: [] };
   } else if (kind === 'loop') {
     node = loopTemplate(uniqueName('loop', taken));
   } else {
@@ -220,6 +225,38 @@ export function addNode(
     nodeId: node.id,
     definition: mapGraphAt(definition, path, (g) => ({ ...g, nodes: [...g.nodes, node] })),
   };
+}
+
+/**
+ * Points sub-flow step `nodeId` at the saved workflow `child`: it takes the child's inputs
+ * and outputs as its own (and its name, while it still has the default), and edges to
+ * fields the child does not have are removed.
+ */
+export function setSubflowWorkflow(
+  definition: WorkflowDefinition,
+  nodeId: string,
+  child: Pick<WorkflowDefinition, 'id' | 'name' | 'inputs' | 'outputs'>,
+  path: ScopePath = []
+): WorkflowDefinition {
+  const ins = new Set(child.inputs.map((p) => p.name));
+  const outs = new Set(child.outputs.map((p) => p.name));
+  return mapGraphAt(definition, path, (graph) => ({
+    ...graph,
+    nodes: graph.nodes.map((n) =>
+      n.id === nodeId && n.kind === 'subflow'
+        ? {
+            ...n,
+            workflowId: child.id,
+            name: n.name === 'Sub-flow' ? child.name : n.name,
+            inputs: child.inputs.map((p) => ({ ...p })),
+            outputs: child.outputs.map((p) => ({ ...p })),
+          }
+        : n
+    ),
+    dataEdges: graph.dataEdges.filter(
+      (e) => !(e.toNodeId === nodeId && !ins.has(e.toPort)) && !(e.fromNodeId === nodeId && !outs.has(e.fromPort))
+    ),
+  }));
 }
 
 /** Shallow-merges `patch` into a node at `path`; `id` and `kind` cannot change. */
@@ -278,7 +315,7 @@ function mirrorOf(
   return null;
 }
 
-/** Built-in fields of the scope at `path` (a parallel item's `item` and `itemIndex`). */
+/** Built-in fields of the scope at `path` (a parallel item's `itemIndex`). */
 export function implicitPorts(definition: WorkflowDefinition, nodeId: string, side: PortSide, path: ScopePath): readonly PortDefinition[] {
   if (nodeId !== INPUTS_NODE_ID || side !== 'out' || path.length === 0) return [];
   return containerAt(definition, path)?.kind === 'parallel' ? PARALLEL_ITEM_PORTS : [];
@@ -388,6 +425,8 @@ export function updatePort(
     next = mapPortEdges(next, nodeId, side, name, path, (e, end) => (end === 'from' ? { ...e, fromPort: newName } : { ...e, toPort: newName }));
     // A parallel step's list input is referenced by name.
     const container = side === 'in' ? graphAt(next, path).nodes.find((n) => n.id === nodeId) : undefined;
+    const parallel = container && nodeParallel(container);
+    if (parallel?.itemsPort === name) next = updateNode(next, nodeId, { parallel: { ...parallel, itemsPort: newName } }, path);
     const mirror = mirrorOf(definition, nodeId, side, path);
     const owner = container?.kind === 'parallel' ? { id: nodeId, path } : nodeId === INPUTS_NODE_ID && mirror ? { id: mirror.nodeId, path: mirror.path } : null;
     if (owner) {
@@ -414,21 +453,25 @@ export function removePort(definition: WorkflowDefinition, nodeId: string, side:
 // Edges
 // ---------------------------------------------------------------------------
 
-function controlReachable(graph: WorkflowGraph, from: string, to: string): boolean {
+/** One existing forward execution path, excluding loop-back edges. */
+export function findExecutionPath(graph: WorkflowGraph, from: string, to: string): ControlEdge[] | undefined {
   const seen = new Set<string>([from]);
-  const queue = [from];
+  const queue: { nodeId: string; path: ControlEdge[] }[] = [{ nodeId: from, path: [] }];
   while (queue.length > 0) {
     const current = queue.shift()!;
-    if (current === to) return true;
+    if (current.nodeId === to) return current.path;
     for (const edge of graph.controlEdges) {
-      if (edge.fromNodeId === current && !seen.has(edge.toNodeId)) {
+      // A loop's way back does not order steps.
+      if (edge.fromNodeId === current.nodeId && !edge.loop && !seen.has(edge.toNodeId)) {
         seen.add(edge.toNodeId);
-        queue.push(edge.toNodeId);
+        queue.push({ nodeId: edge.toNodeId, path: [...current.path, edge] });
       }
     }
   }
-  return false;
+  return undefined;
 }
+
+const controlReachable = (graph: WorkflowGraph, from: string, to: string) => !!findExecutionPath(graph, from, to);
 
 export interface CanvasConnection {
   readonly source: string;
@@ -439,29 +482,31 @@ export interface CanvasConnection {
 
 /** Quick check for React Flow's `isValidConnection` (the full rules live in `connect`). */
 export function isPlausibleConnection(connection: CanvasConnection): boolean {
+  const control = connection.sourceHandle === 'ctrl-out' && connection.targetHandle === 'ctrl-in';
+  const parameters = !!connection.sourceHandle?.startsWith('out:') && !!connection.targetHandle?.startsWith('in:');
   return (
-    connection.source !== connection.target &&
+    // Execution from a step back to itself repeats it (a loop of one step).
+    (connection.source !== connection.target || control) &&
     connection.target !== INPUTS_NODE_ID &&
     connection.source !== OUTPUTS_NODE_ID &&
-    !!connection.sourceHandle &&
-    !!connection.targetHandle
+    (parameters || (control && connection.source !== INPUTS_NODE_ID && connection.target !== OUTPUTS_NODE_ID))
   );
 }
 
 /**
  * Turns a drag on the canvas into graph edges in the graph at `path`:
  * - header connector to header connector: a control (ordering) edge;
- * - port to port: a data edge, plus the control edge the compiler needs when the target
+ * - port to port: a data edge, plus an execution dependency when the target
  *   is not already ordered after the source;
- * - dropping on a "+" row (or a card header) creates the missing port, named after the
+ * - dropping on a "+" parameter row creates the missing port, named after the
  *   port on the other end.
  */
 export function connect(
   definition: WorkflowDefinition,
   connection: CanvasConnection,
   path: ScopePath = []
-): EditResult<{ edgeIds: string[] }> {
-  if (!isPlausibleConnection(connection)) return { ok: false, error: 'These two points cannot be connected' };
+): EditResult<{ edgeIds: string[]; message: string; addedControlEdgeId?: string }> {
+  if (!isPlausibleConnection(connection)) return { ok: false, error: 'Connect execution to execution, or an output parameter to an input parameter. These points cannot be mixed.' };
   const { source, target } = connection;
   const sourceHandle = connection.sourceHandle!;
   const targetHandle = connection.targetHandle!;
@@ -475,9 +520,25 @@ export function connect(
     if (graph.controlEdges.some((e) => e.fromNodeId === source && e.toNodeId === target)) {
       return { ok: false, error: 'These steps are already ordered' };
     }
+    const fromNode = graph.nodes.find((n) => n.id === source);
+    if (source === target || controlReachable(graph, target, source)) {
+      // Back to a step that leads here (or to itself): the way back of a loop, decided by this step's result.
+      if (graph.controlEdges.some((e) => e.fromNodeId === source && e.loop)) {
+        return { ok: false, error: `"${fromNode?.name ?? source}" already loops back; a step closes one loop` };
+      }
+      const id = uniqueName(`loop_${source}_to_${target}`, allEdgeIds(graph));
+      const edge: ControlEdge = {
+        id,
+        fromNodeId: source,
+        toNodeId: target,
+        when: { kind: 'verdict_is', verdict: 'NEEDS_FIX' },
+        loop: { maxRounds: 3, onExhausted: 'fail' },
+      };
+      return { ok: true, edgeIds: [id], message: 'Loop-back execution connected. Parameters are unchanged.', definition: patchGraph(definition, path, { controlEdges: [...graph.controlEdges, edge] }) };
+    }
     const id = uniqueName(`ctrl_${source}_to_${target}`, allEdgeIds(graph));
     const edge: ControlEdge = { id, fromNodeId: source, toNodeId: target };
-    return { ok: true, edgeIds: [id], definition: patchGraph(definition, path, { controlEdges: [...graph.controlEdges, edge] }) };
+    return { ok: true, edgeIds: [id], message: 'Execution dependency added. This connection does not pass parameters.', definition: patchGraph(definition, path, { controlEdges: [...graph.controlEdges, edge] }) };
   }
 
   let next = definition;
@@ -510,27 +571,51 @@ export function connect(
 
   const ids = allEdgeIds(graph);
   const dataId = uniqueName(`data_${source}.${fromPort}_to_${target}.${toPort}`, ids);
+  // Wired back to an earlier step (inside a loop): the value of the previous round, absent
+  // in the first one, so it never orders the steps and is not required.
+  const backwards = !endpoint(source) && !endpoint(target) && controlReachable(graph, target, source);
   const dataEdge: DataEdge = {
     id: dataId,
     fromNodeId: source,
     fromPort,
     toNodeId: target,
     toPort,
-    required: true,
+    required: !backwards,
     delivery: 'auto',
   };
   const edgeIds = [dataId];
   let controlEdges = graph.controlEdges;
-  if (!endpoint(source) && !endpoint(target) && !controlReachable(graph, source, target)) {
+  let addedControlEdgeId: string | undefined;
+  if (backwards) {
+    next = updatePortRequired(next, target, toPort, path);
+  } else if (!endpoint(source) && !endpoint(target) && !controlReachable(graph, source, target)) {
     const controlId = uniqueName(`ctrl_${source}_to_${target}`, [...ids, dataId]);
     controlEdges = [...controlEdges, { id: controlId, fromNodeId: source, toNodeId: target }];
     edgeIds.push(controlId);
+    addedControlEdgeId = controlId;
   }
+  const name = (id: string) => graph.nodes.find(node => node.id === id)?.name ?? id;
   return {
     ok: true,
     edgeIds,
+    ...(addedControlEdgeId ? { addedControlEdgeId } : {}),
+    message: addedControlEdgeId
+      ? `Parameter connected. Also added execution dependency: ${name(source)} → ${name(target)} (after success). Both lines are shown.`
+      : backwards ? 'Previous-round parameter connected. No forward execution dependency was added.'
+        : endpoint(source) || endpoint(target) ? 'Parameter connected to the workflow boundary. No execution dependency was added.'
+          : 'Parameter connected. The existing execution path and its branch conditions are unchanged.',
     definition: patchGraph(next, path, { dataEdges: [...graph.dataEdges, dataEdge], controlEdges }),
   };
+}
+
+/** Marks an input port optional (values carried from a previous round are absent in the first). */
+function updatePortRequired(definition: WorkflowDefinition, nodeId: string, port: string, path: ScopePath): WorkflowDefinition {
+  return mapGraphAt(definition, path, (graph) => ({
+    ...graph,
+    nodes: graph.nodes.map((n) =>
+      n.id === nodeId ? ({ ...n, inputs: n.inputs.map((p) => (p.name === port ? { ...p, required: false } : p)) } as WorkflowNode) : n
+    ),
+  }));
 }
 
 export function removeEdge(definition: WorkflowDefinition, edgeId: string, path: ScopePath = []): WorkflowDefinition {
@@ -558,6 +643,21 @@ export function setEdgeCondition(
 }
 
 /** The control edge drawn for a pair, or the hidden one paired with a data edge. */
+/** Changes a control edge's loop settings (way back): round limit and what happens after it. */
+export function updateLoopBack(
+  definition: WorkflowDefinition,
+  edgeId: string,
+  patch: Partial<NonNullable<ControlEdge['loop']>>,
+  path: ScopePath = []
+): WorkflowDefinition {
+  return mapGraphAt(definition, path, (graph) => ({
+    ...graph,
+    controlEdges: graph.controlEdges.map((e) =>
+      e.id === edgeId && e.loop ? { ...e, loop: { ...e.loop, ...patch } } : e
+    ),
+  }));
+}
+
 export function findControlEdge(definition: WorkflowDefinition, edgeId: string, path: ScopePath = []): ControlEdge | undefined {
   const graph = graphAt(definition, path);
   const direct = graph.controlEdges.find((e) => e.id === edgeId);

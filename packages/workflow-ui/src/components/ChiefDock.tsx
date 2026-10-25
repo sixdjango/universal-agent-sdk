@@ -2,12 +2,14 @@ import {
   type ChiefLevel,
   type ChiefPolicy,
   ChiefPolicySchema,
+  type LiveAttemptProgress,
   type WaitRequest,
 } from '@universal-agent/workflow-contract';
 import type { WorkflowRunState } from '@universal-agent/workflow-runtime';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentListing } from '../types';
 import { buildChiefThread, type ChiefThreadItem, TRIGGER_LABEL } from '../model/chief-thread';
+import { ThinkingTrace } from './ThinkingTrace';
 
 const LEVELS: { value: ChiefLevel; label: string; short: string }[] = [
   { value: 'observe', label: 'Observe only', short: 'observes' },
@@ -65,6 +67,7 @@ function ThreadItem({ item, onAnswer }: { item: ChiefThreadItem; onAnswer(wait: 
   return (
     <div className="chief-msg from-chief">
       <div className="chief-bubble">
+        {item.thinking && <ThinkingTrace trace={item.thinking} defaultOpen={false} variant="chat" />}
         {item.trigger !== 'user.message' && (
           <div className="chief-label">
             Stepped in: {TRIGGER_LABEL[item.trigger]}
@@ -105,13 +108,17 @@ export function ChiefDock(props: {
   readonly editable: boolean;
   readonly agents: readonly AgentListing[];
   readonly chiefAnswering: boolean;
+  readonly liveProgress?: readonly LiveAttemptProgress[];
   nodeName(nodeId: string): string;
   onPolicyChange(next: ChiefPolicy | null): void;
   onSend(text: string): Promise<void>;
   onAnswer(wait: WaitRequest, answer: string): void;
 }) {
   const { run, policy } = props;
-  const thread = useMemo(() => buildChiefThread(run, props.nodeName), [run, props.nodeName]);
+  const thread = useMemo(
+    () => buildChiefThread(run, props.nodeName, props.liveProgress),
+    [run, props.nodeName, props.liveProgress]
+  );
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -135,7 +142,7 @@ export function ChiefDock(props: {
     if (open) listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [open, thread.items.length, thread.waitingForChief]);
 
-  const agentName = policy?.agentRef ? (props.agents.find((a) => a.agentId === policy.agentRef?.split('@')[0])?.name ?? policy.agentRef) : 'Default supervisor';
+  const agentName = policy?.agentRef ? (props.agents.find((a) => a.agentId === policy.agentRef?.split('@')[0])?.name ?? policy.agentRef) : 'Default chief';
   const level = LEVELS.find((l) => l.value === policy?.maxLevel);
   const canTalk = !!run && !!policy;
   const unread = Math.max(0, thread.chiefEntryCount - seen);
@@ -183,10 +190,8 @@ export function ChiefDock(props: {
             ))}
             {(thread.waitingForChief || props.chiefAnswering) && (
               <div className="chief-msg from-chief">
-                <div className="chief-bubble chief-typing" aria-label="The chief is answering">
-                  <span />
-                  <span />
-                  <span />
+                <div className="chief-bubble" aria-label="The chief is answering">
+                  <ThinkingTrace trace={thread.activeThinking} defaultOpen={true} variant="chat" />
                 </div>
               </div>
             )}
@@ -203,7 +208,7 @@ export function ChiefDock(props: {
                 <input
                   type="checkbox"
                   checked={!!policy}
-                  onChange={(e) => props.onPolicyChange(e.target.checked ? ChiefPolicySchema.parse({ maxLevel: 'escalate' }) : null)}
+                  onChange={(e) => props.onPolicyChange(e.target.checked ? ChiefPolicySchema.parse({}) : null)}
                 />
                 <span>
                   <span>Supervise runs</span>
@@ -223,7 +228,7 @@ export function ChiefDock(props: {
                         )
                       }
                     >
-                      <option value="">Default supervisor</option>
+                      <option value="">Default chief (on the engine this flow's agents use)</option>
                       {props.agents.map((a) => (
                         <option key={a.agentId} value={a.agentId}>
                           {a.name}

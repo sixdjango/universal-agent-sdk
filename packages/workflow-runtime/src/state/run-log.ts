@@ -1,26 +1,10 @@
-import { canonicalizeJsonValue, WorkflowDefinitionSchema } from '@universal-agent/workflow-contract';
+import { canonicalizeJsonValue } from '@universal-agent/workflow-contract';
 import {
-  EMPTY_CHIEF_RUN_STATE,
   type RunLogEntry,
   type RunMutation,
   type RunSnapshotState,
   type WorkflowRunState,
 } from '../ports';
-
-/**
- * Fills fields added to run state after a run was recorded (agents, chief, workspaces, and
- * newer contract defaults in its definition). Apply to `run.created` states and snapshots.
- */
-export function upgradeRunState<T extends RunSnapshotState>(state: T): T {
-  const definition = WorkflowDefinitionSchema.safeParse(state.definition);
-  return {
-    ...state,
-    definition: definition.success ? definition.data : state.definition,
-    pinnedAgents: state.pinnedAgents ?? {},
-    workspaces: state.workspaces ?? {},
-    chief: state.chief ?? EMPTY_CHIEF_RUN_STATE,
-  };
-}
 
 /**
  * Applies one log entry to `state`. Pure: never mutates its inputs.
@@ -36,7 +20,7 @@ export function applyRunLogEntry(
       throw new Error(`Run "${entry.runId}" received a second "run.created" entry at seq ${entry.seq}`);
     }
     return {
-      ...upgradeRunState(mutation.state),
+      ...mutation.state,
       revision: entry.seq,
       coordinatorEpoch: entry.coordinatorEpoch,
       updatedAtMs: entry.recordedAtMs,

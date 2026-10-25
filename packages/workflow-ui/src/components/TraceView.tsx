@@ -1,6 +1,8 @@
-import type { WaitRequest } from '@universal-agent/workflow-contract';
+import type { LiveAttemptProgress, WaitRequest } from '@universal-agent/workflow-contract';
 import type { WorkflowRunState } from '@universal-agent/workflow-runtime';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ConversationReader } from '../model/conversation';
+import { NodeConversation } from './NodeConversation';
 import {
   buildTraceModel,
   formatCostUsd,
@@ -8,6 +10,9 @@ import {
   formatTokenCount,
   type TraceSpan,
 } from '../model/trace';
+import { ThinkingTrace } from './ThinkingTrace';
+import { NodeData } from './NodeData';
+import type { NodeDataReader } from '../model/node-data';
 import {
   AgentIcon,
   CheckIcon,
@@ -148,19 +153,61 @@ function SpanWaitControl({
   );
 }
 
-function SpanDetailCard({
-  span,
+export function NodeExecutionDetails({
+  span: rootSpan,
   onClose,
   onOpenArtifact,
   onRerun,
   onAnswer,
+  runId,
+  runActive = false,
+  conversationReader,
+  dataReader,
 }: {
   span: TraceSpan;
   onClose(): void;
   onOpenArtifact(artifactId: string, title: string): void;
-  onRerun(nodeId: string): void;
+  onRerun(nodeId: string, scopeKey?: string): void;
   onAnswer(wait: WaitRequest, answer: string): Promise<void>;
+  runId: string;
+  runActive?: boolean;
+  conversationReader?: ConversationReader;
+  /** Loads what the step saved (its "Data" tab); omit to hide the tab. */
+  dataReader?: NodeDataReader;
 }) {
+  const [selectedItem, setSelectedItem] = useState('');
+  const choices: { span: TraceSpan; label: string }[] = [];
+  const collect = (spans: readonly TraceSpan[], prefix: string) => {
+    for (const child of spans) {
+      const label = prefix ? `${prefix} / ${child.title}` : child.title;
+      if (child.nodeId && (child.hasConversation || (child.id.startsWith('node:') && !child.children.some(c => c.nodeId && c.id.startsWith('node:'))))) choices.push({ span: child, label });
+      collect(child.children, label);
+    }
+  };
+  if (rootSpan.parallelBatch) collect(rootSpan.children, '');
+  const span = choices.find(c => c.span.id === selectedItem)?.span ?? rootSpan;
+  const [tab, setTab] = useState<'summary' | 'conversation' | 'data'>('summary');
+  const tabsId = useId();
+  const card = useRef<HTMLDivElement>(null);
+  const hasConversation = Boolean(span.hasConversation && span.nodeId && conversationReader);
+  const hasData = Boolean(span.nodeId && dataReader);
+  const tabs = ['summary', ...(hasConversation ? ['conversation' as const] : []), ...(hasData ? ['data' as const] : [])] as const;
+  const tabLabel = { summary: 'Overview', conversation: 'Conversation', data: 'Data' } as const;
+  useLayoutEffect(() => {
+    const fit = () => {
+      if (!card.current) return;
+      // Trace details sit below the waterfall header; keep them above the chief dock.
+      const available = Math.max(100, window.innerHeight - card.current.getBoundingClientRect().top - 100);
+      card.current.style.setProperty('--detail-max-height', `${available}px`);
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    window.addEventListener('scroll', fit, true);
+    return () => {
+      window.removeEventListener('resize', fit);
+      window.removeEventListener('scroll', fit, true);
+    };
+  }, [tab]);
   const statusLabel =
     span.status === 'running'
       ? 'Running'
@@ -172,9 +219,11 @@ function SpanDetailCard({
 
   return (
     <div
+      ref={card}
       className="trace-detail-card"
       role="dialog"
       aria-label={`Details for ${span.title}`}
+      data-tab={hasConversation ? tab : 'summary'}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="trace-detail-head">
@@ -192,6 +241,35 @@ function SpanDetailCard({
         </button>
       </div>
 
+      {rootSpan.parallelBatch && <label className="field parallel-execution-picker">
+        <span>Item execution</span>
+        <select aria-label="Item execution" value={span === rootSpan ? '' : span.id} onChange={event => { setSelectedItem(event.target.value); setTab('summary'); }}>
+          <option value="">All items · {rootSpan.status}</option>
+          {choices.map(c => <option key={c.span.id} value={c.span.id}>{c.label} · {c.span.status}</option>)}
+        </select>
+      </label>}
+
+      {tabs.length > 1 && <div className="execution-detail-tabs" role="tablist" aria-label="Execution details">
+        {tabs.map((name, index) => <button type="button" key={name} role="tab"
+          id={`${tabsId}-${name}`} aria-controls={`${tabsId}-${name}-panel`} aria-selected={tab === name} tabIndex={tab === name ? 0 : -1}
+          onClick={() => setTab(name)} onKeyDown={event => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            const next = tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]!;
+            setTab(next);
+            document.getElementById(`${tabsId}-${next}`)?.focus();
+          }}>{tabLabel[name]}</button>)}
+      </div>}
+
+      {hasData && tab === 'data' && <div role="tabpanel" id={`${tabsId}-data-panel`} aria-labelledby={`${tabsId}-data`}>
+        <NodeData reader={dataReader!} target={{ runId, scopeKey: span.scopeKey, nodeId: span.nodeId! }} live={runActive} />
+      </div>}
+
+      {hasConversation && tab === 'conversation' && <div role="tabpanel" id={`${tabsId}-conversation-panel`} aria-labelledby={`${tabsId}-conversation`}>
+        <NodeConversation reader={conversationReader!} target={{ runId, scopeKey: span.scopeKey, nodeId: span.nodeId! }} live={runActive} />
+      </div>}
+
+      <div role={tabs.length > 1 ? 'tabpanel' : undefined} id={`${tabsId}-summary-panel`} aria-labelledby={tabs.length > 1 ? `${tabsId}-summary` : undefined} hidden={tab !== 'summary'}>
       <div className="trace-detail-metrics">
         <div>
           <div className="trace-metric-label">DURATION</div>
@@ -241,6 +319,13 @@ function SpanDetailCard({
       )}
 
       {span.pendingWait && <SpanWaitControl wait={span.pendingWait} onAnswer={onAnswer} />}
+
+      {span.thinking && (
+        <div className="trace-detail-section">
+          <div className="trace-detail-section-label">EXECUTION STEPS</div>
+          <ThinkingTrace trace={span.thinking} defaultOpen={true} variant="drawer" />
+        </div>
+      )}
 
       {span.inputPreview && (
         <div className="trace-detail-section">
@@ -296,12 +381,13 @@ function SpanDetailCard({
             </button>
           )}
           {span.rerunnable && span.nodeId && (
-            <button type="button" className="btn" onClick={() => onRerun(span.nodeId!)}>
+            <button type="button" className="btn" onClick={() => onRerun(span.nodeId!, span.scopeKey)}>
               <RerunIcon /> Rerun from here
             </button>
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -309,18 +395,25 @@ function SpanDetailCard({
 export function TraceView(props: {
   run: WorkflowRunState;
   runActive: boolean;
+  liveProgress?: readonly LiveAttemptProgress[];
   agentNames: Readonly<Record<string, string>>;
+  theme?: 'dark' | 'light';
+  onToggleTheme?: () => void;
   onOpenArtifact(artifactId: string, title: string): void;
-  onRerun(nodeId: string): void;
+  onRerun(nodeId: string, scopeKey?: string): void;
   onAnswer(wait: WaitRequest, answer: string): Promise<void>;
+  conversationReader?: ConversationReader;
+  dataReader?: NodeDataReader;
 }) {
-  const { run, runActive, agentNames, onOpenArtifact, onRerun, onAnswer } = props;
+  const { run, runActive, liveProgress, agentNames, onOpenArtifact, onRerun, onAnswer } = props;
   const isLive = run.status === 'RUNNING' || run.status === 'WAITING' || runActive;
 
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
-  const [lightTheme, setLightTheme] = useState<boolean>(false);
+  const [localLightTheme, setLocalLightTheme] = useState<boolean>(false);
+  const effectiveTheme = props.theme ?? (localLightTheme ? 'light' : 'dark');
+  const toggleTheme = props.onToggleTheme ?? (() => setLocalLightTheme((v) => !v));
 
   useEffect(() => {
     if (!isLive) return;
@@ -330,8 +423,15 @@ export function TraceView(props: {
   }, [isLive]);
 
   const model = useMemo(
-    () => buildTraceModel({ run, runActive, agentNames, nowMs }),
-    [run, runActive, agentNames, nowMs]
+    () =>
+      buildTraceModel({
+        run,
+        runActive,
+        ...(liveProgress ? { liveProgress } : {}),
+        agentNames,
+        nowMs,
+      }),
+    [run, runActive, liveProgress, agentNames, nowMs]
   );
 
   const flatRows = useMemo(() => {
@@ -352,7 +452,7 @@ export function TraceView(props: {
     if (!selectedSpanId) return null;
     const find = (list: readonly TraceSpan[]): TraceSpan | null => {
       for (const s of list) {
-        if (s.id === selectedSpanId) return s;
+        if (s.id === selectedSpanId || s.id.replace(/^running:/, 'node:') === selectedSpanId.replace(/^running:/, 'node:')) return s;
         const child = find(s.children);
         if (child) return child;
       }
@@ -369,7 +469,7 @@ export function TraceView(props: {
   return (
     <div
       className="trace-shell"
-      data-theme={lightTheme ? 'light' : 'dark'}
+      data-theme={effectiveTheme}
       onClick={() => setSelectedSpanId(null)}
     >
       <div className="trace-card" onClick={(e) => e.stopPropagation()}>
@@ -388,10 +488,10 @@ export function TraceView(props: {
             <button
               type="button"
               className="trace-theme-btn"
-              onClick={() => setLightTheme((v) => !v)}
-              title="Switch trace theme"
+              onClick={toggleTheme}
+              title="Switch theme"
             >
-              {lightTheme ? 'Dark' : 'Light'}
+              {effectiveTheme === 'light' ? 'Dark' : 'Light'}
             </button>
             <span className="trace-status-badge" data-status={model.status}>
               {model.status === 'live' && <span className="dot" />}
@@ -484,7 +584,7 @@ export function TraceView(props: {
             {flatRows.map(({ span, depth }) => {
               const hasChildren = span.children.length > 0;
               const isCollapsed = !!collapsed[span.id];
-              const isSelected = selectedSpanId === span.id;
+              const isSelected = selectedSpan?.id === span.id;
               const barMeta = `${formatDurationMs(span.durationMs)}${
                 span.costUsd && span.costUsd > 0 ? ` · ${formatCostUsd(span.costUsd)}` : ''
               }`;
@@ -585,8 +685,13 @@ export function TraceView(props: {
             })}
 
             {selectedSpan && (
-              <SpanDetailCard
+              <NodeExecutionDetails
+                key={`${run.runId}:${selectedSpan.scopeKey}:${selectedSpan.nodeId ?? selectedSpan.id}`}
                 span={selectedSpan}
+                runId={run.runId}
+                runActive={runActive}
+                conversationReader={props.conversationReader}
+                {...(props.dataReader ? { dataReader: props.dataReader } : {})}
                 onClose={() => setSelectedSpanId(null)}
                 onOpenArtifact={onOpenArtifact}
                 onRerun={onRerun}

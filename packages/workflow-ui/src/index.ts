@@ -17,6 +17,9 @@ export * from './canvas/actions';
 // Panels
 export * from './components/Inspector';
 export * from './components/TraceView';
+export * from './components/NodeConversation';
+export * from './components/ThinkingTrace';
+export * from './components/NodeData';
 export * from './components/ChiefDock';
 export * from './components/RuntimeFields';
 export * from './components/WorkspacesPanel';
@@ -29,7 +32,13 @@ export * from './hooks/useRunStream';
 // View models and definition editing (pure functions, usable without React)
 export * from './model/canvas';
 export * from './model/loop';
+export * from './model/cycle-view';
+export * from './model/cycle-editing';
+export * from './model/layout';
 export * from './model/trace';
+export * from './model/conversation';
+export * from './model/thinking';
+export * from './model/node-data';
 export * from './model/editing';
 export * from './model/scope';
 export * from './model/workspaces';

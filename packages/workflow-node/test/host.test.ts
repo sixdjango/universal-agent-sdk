@@ -116,4 +116,30 @@ describe('WorkflowHost (no transport)', () => {
     expect(again.workspaces.app!.path).toBe(web);
     expect(again.workspaces.backend!.path).not.toBe(backend.path);
   });
+  it('embeds the workflows sub-flow steps run when a run starts', async () => {
+    const { host, ran, settled } = await open();
+    host.library.save(
+      createWorkflowBuilder('child')
+        .addWorkflowInput({ name: 'topic', type: 'string', required: true })
+        .addAgent({ id: 'inner', name: 'Inner', role: 'author', goal: 'x', inputs: [{ name: 'topic', type: 'string', required: true }] })
+        .connectData({ fromNodeId: '$input', fromPort: 'topic', toNodeId: 'inner', toPort: 'topic' })
+        .buildDefinition(),
+      { mode: 'create' }
+    );
+    const parent = createWorkflowBuilder('parent')
+      .addWorkflowInput({ name: 'topic', type: 'string', required: true })
+      .addSubflow({ id: 'sub', name: 'Sub', workflowId: 'child', inputs: [{ name: 'topic', type: 'string', required: true }] })
+      .connectData({ fromNodeId: '$input', fromPort: 'topic', toNodeId: 'sub', toPort: 'topic' })
+      .buildDefinition();
+    host.library.save(parent, { mode: 'create' });
+
+    const run = await settled((await host.startRun({ workflowId: 'parent', inputs: { topic: 'x' } })).runId);
+    expect(run.status).toBe('SUCCEEDED');
+    expect(ran).toHaveProperty('inner');
+    expect(Object.keys(run.scopes)).toContain('$root/sub:round_0');
+
+    host.library.save({ ...parent, id: 'broken', graph: { ...parent.graph, nodes: parent.graph.nodes.map((n) => ({ ...n, workflowId: 'gone' })) } }, { mode: 'create' });
+    const err = await reject(host.startRun({ workflowId: 'broken', inputs: { topic: 'x' } }), 'invalid');
+    expect(err.message).toMatch(/does not exist/);
+  });
 });

@@ -8,9 +8,12 @@ import type {
   ScriptExecutionResult,
 } from '@universal-agent/workflow-runtime';
 import { z } from 'zod';
+import type { ArtifactToolHost } from '../artifact-tools/host';
 import { diffSinceSnapshot, snapshotWorkingTree } from '../workspace/change-capture';
 
 export interface NodeScriptExecutorOptions {
+  /** Gives scripts the step tools: `ua-workflow` on PATH and `UA_WORKFLOW_RPC` (data, inputs, artifacts). */
+  readonly tools?: ArtifactToolHost;
   readonly defaultWorkdir?: string;
   readonly defaultEnv?: NodeJS.ProcessEnv;
   /** Record a git diff of what writing scripts changed in their workspace (default true). */
@@ -73,11 +76,13 @@ export class NodeScriptExecutor {
   private readonly defaultWorkdir: string;
   private readonly defaultEnv?: NodeJS.ProcessEnv;
   private readonly captureChanges: boolean;
+  private readonly tools?: ArtifactToolHost;
 
   constructor(options: NodeScriptExecutorOptions = {}) {
     this.defaultWorkdir = options.defaultWorkdir ?? process.cwd();
     this.defaultEnv = options.defaultEnv;
     this.captureChanges = options.captureChanges ?? true;
+    if (options.tools) this.tools = options.tools;
   }
 
   /**
@@ -87,7 +92,12 @@ export class NodeScriptExecutor {
   async executeScript(request: ScriptExecutionRequest): Promise<ScriptExecutionResult> {
     const root = request.workspace?.path ?? this.defaultWorkdir;
     const io = await mkdtemp(join(tmpdir(), 'ua-script-'));
+    const tools = this.tools && request.data ? this.tools.register({ data: request.data }) : null;
     try {
+      const toolEnv =
+        tools && this.tools
+          ? await this.tools.cliEnv(tools.token, request.node.env?.PATH ?? this.defaultEnv?.PATH ?? process.env.PATH ?? '')
+          : {};
       const before =
         this.captureChanges && !request.isolated && request.node.writeScopes.length > 0
           ? await snapshotWorkingTree(root)
@@ -96,6 +106,7 @@ export class NodeScriptExecutor {
       const result = await this.run(request, root, {
         ...(await writeScriptInputs(io, request.inputs)),
         UA_OUTPUTS_FILE: outputsFile,
+        ...toolEnv,
       });
       const written = await readFile(outputsFile, 'utf8').catch(() => null);
       let declared: z.infer<typeof ScriptOutputsFileSchema> = {};
@@ -123,6 +134,7 @@ export class NodeScriptExecutor {
         ...(changes ? { changes } : {}),
       };
     } finally {
+      tools?.release();
       await rm(io, { recursive: true, force: true });
     }
   }

@@ -1,0 +1,5713 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Universal Agent workflow server",
+    "version": "1.0.0",
+    "description": "Save workflows, register agents and workspaces, start and follow runs, answer gates, talk to the chief, cancel, and read artifacts, intermediate data and agent conversations. The server binds to loopback by default and has no authentication of its own."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4317"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Server",
+      "description": "Health and this document."
+    },
+    {
+      "name": "Workflows",
+      "description": "Saved workflow definitions, their canvas layout and remembered workspace bindings."
+    },
+    {
+      "name": "Agents",
+      "description": "Agent profiles (engine, charter, rules, skills) steps delegate to, and the engines installed here."
+    },
+    {
+      "name": "Workspaces",
+      "description": "Directories runs work in, bound to workflow slots."
+    },
+    {
+      "name": "Runs",
+      "description": "Start, follow, steer, cancel and inspect runs: their log, artifacts, intermediate data and agent conversations."
+    },
+    {
+      "name": "Conversations",
+      "description": "Recorded agent sessions, also usable on their own."
+    }
+  ],
+  "security": [],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Health check",
+        "tags": [
+          "Server"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "summary": "This document",
+        "tags": [
+          "Server"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows": {
+      "get": {
+        "operationId": "listWorkflows",
+        "summary": "List saved workflows",
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workflows": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WorkflowSummary"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkflow",
+        "summary": "Save a new workflow",
+        "tags": [
+          "Workflows"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveWorkflowBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}": {
+      "get": {
+        "operationId": "getWorkflow",
+        "summary": "Get a saved workflow",
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "saveWorkflow",
+        "summary": "Save a new version of a workflow",
+        "description": "The definition id must match the path. The body is validated as a WorkflowDefinition.",
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveWorkflowBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/workspace-bindings": {
+      "put": {
+        "operationId": "setWorkspaceBindings",
+        "summary": "Remember the workspace each slot runs in",
+        "description": "Workspace id per slot, used when a run names none.",
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceBindings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecord"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/layout": {
+      "put": {
+        "operationId": "saveLayout",
+        "summary": "Save the canvas layout",
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanvasLayout"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/samples": {
+      "post": {
+        "operationId": "installSamples",
+        "summary": "Install the sample agents and workflow",
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecord"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents": {
+      "get": {
+        "operationId": "listAgents",
+        "summary": "List registered agents with their versions",
+        "tags": [
+          "Agents"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "registerAgent",
+        "summary": "Register an agent version",
+        "description": "Versions are immutable: registering the same id and version again with a different profile fails with 409.",
+        "tags": [
+          "Agents"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "summary": "List workspaces",
+        "tags": [
+          "Workspaces"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workspaces": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Workspace"
+                      }
+                    },
+                    "defaultWorkspaceId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkspace",
+        "summary": "Register a directory as a workspace",
+        "tags": [
+          "Workspaces"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkspaceBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces/{id}": {
+      "patch": {
+        "operationId": "updateWorkspace",
+        "summary": "Change a workspace",
+        "tags": [
+          "Workspaces"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWorkspaceBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkspace",
+        "summary": "Forget a workspace",
+        "tags": [
+          "Workspaces"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtimes": {
+      "get": {
+        "operationId": "listRuntimes",
+        "summary": "Agent engines on this machine, with their models and effort levels",
+        "tags": [
+          "Agents"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runtimes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runtimes/{agentType}/refresh": {
+      "post": {
+        "operationId": "refreshRuntime",
+        "summary": "Re-read an engine's models",
+        "tags": [
+          "Agents"
+        ],
+        "parameters": [
+          {
+            "name": "agentType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "summary": "List runs, newest first",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "workflowId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RunSummary"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "startRun",
+        "summary": "Start a run",
+        "description": "Workspaces maps slots to workspace ids (see /api/workspaces); slots left out use the bindings remembered for the workflow. The run executes in the background; follow it with /api/runs/{id}/stream.",
+        "tags": [
+          "Runs"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}": {
+      "get": {
+        "operationId": "getRun",
+        "summary": "Get a run",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/stream": {
+      "get": {
+        "operationId": "streamRun",
+        "summary": "Follow a run's log",
+        "description": "Server-Sent Events. `log` events carry one RunLogEntry each (`id` = its seq; fold them with the SDK's `applyRunLogEntry`); `activity` events carry `{ active, chiefAnswering, liveProgress }`. Reconnect with `Last-Event-ID` or `?after=<seq>`.",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Only entries after this seq"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/cancel": {
+      "post": {
+        "operationId": "cancelRun",
+        "summary": "Stop a run for good",
+        "description": "Steps still executing are aborted and their results dropped; the run ends CANCELLED. A finished run is returned unchanged.",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "run": {
+                      "$ref": "#/components/schemas/RunState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/rerun": {
+      "post": {
+        "operationId": "rerunFromNode",
+        "summary": "Run again from a step",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerunBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/respond": {
+      "post": {
+        "operationId": "respondToRun",
+        "summary": "Answer a gate decision or an agent question",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RespondBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/chief/messages": {
+      "post": {
+        "operationId": "messageChief",
+        "summary": "Talk to the run's chief",
+        "description": "Returns once the message is recorded. The reply arrives in the run log as a `chief.intervened` event; while steps execute, retries and reruns it asks for wait until they finish.",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChiefMessageBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messageId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/conversations": {
+      "get": {
+        "operationId": "listRunConversations",
+        "summary": "A run's recorded agent conversations",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scopeKey",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nodeId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attemptId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "invocationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "retryIndex",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "roundIndex",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "afterId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Conversation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/data": {
+      "get": {
+        "operationId": "listRunData",
+        "summary": "Intermediate data the steps saved",
+        "description": "What steps stored with `ua-workflow data …` or the `data_*` MCP tools, oldest first.",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "node",
+                "run"
+              ]
+            }
+          },
+          {
+            "name": "nodeId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scopeKey",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "afterId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "records": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/NodeDataRecord"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/findings": {
+      "get": {
+        "operationId": "listOpenFindings",
+        "summary": "Problems still open in a run",
+        "description": "What each review's latest round left (a loop's last round speaks for it; a PASS can carry minor findings) and the issues steps logged (`ua-workflow issue`, `log_issue`), most severe first. What a closing step hands over to a person.",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OpenFinding"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/artifacts/{id}": {
+      "get": {
+        "operationId": "readArtifact",
+        "summary": "Read part of an artifact",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Byte offset (default 0)"
+          },
+          {
+            "name": "max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Bytes to read (default 64 KiB, at most 1 MiB)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations": {
+      "get": {
+        "operationId": "listConversations",
+        "summary": "List conversations",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "afterId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Conversation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createConversation",
+        "summary": "Start a conversation with an agent",
+        "tags": [
+          "Conversations"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConversationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}": {
+      "get": {
+        "operationId": "getConversation",
+        "summary": "Get a conversation",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateConversation",
+        "summary": "Rename or annotate a conversation",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConversationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/turns": {
+      "post": {
+        "operationId": "sendTurn",
+        "summary": "Send a turn",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTurnBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listTurns",
+        "summary": "List turns",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/turns/{turnId}": {
+      "get": {
+        "operationId": "getTurn",
+        "summary": "A turn with its messages",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "turnId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/turns/{turnId}/cancel": {
+      "post": {
+        "operationId": "cancelTurn",
+        "summary": "Cancel a turn",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "turnId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/events": {
+      "get": {
+        "operationId": "listConversationEvents",
+        "summary": "Read recorded events",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "turnId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "recordConversationEvent",
+        "summary": "Record a custom event",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomEventBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/permissions": {
+      "get": {
+        "operationId": "listPendingPermissions",
+        "summary": "Pending permission requests",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/permissions/{permissionId}/respond": {
+      "post": {
+        "operationId": "respondToPermission",
+        "summary": "Answer a permission request",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "permissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionResponseBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/connect": {
+      "post": {
+        "operationId": "connectConversation",
+        "summary": "Connect the conversation's agent session",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/pause": {
+      "post": {
+        "operationId": "pauseConversation",
+        "summary": "Pause the conversation's agent session",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/resume": {
+      "post": {
+        "operationId": "resumeConversation",
+        "summary": "Resume the conversation's agent session",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/recover": {
+      "post": {
+        "operationId": "recoverConversation",
+        "summary": "Recover the conversation's agent session",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/disconnect": {
+      "post": {
+        "operationId": "disconnectConversation",
+        "summary": "Disconnect the conversation's agent session",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/close": {
+      "post": {
+        "operationId": "closeConversation",
+        "summary": "Close the conversation's agent session",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}/stream": {
+      "get": {
+        "operationId": "streamConversation",
+        "summary": "Follow a conversation's events",
+        "description": "Server-Sent Events; reconnect with `Last-Event-ID`.",
+        "tags": [
+          "Conversations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "WorkflowDefinition": {
+        "$id": "#/components/schemas/WorkflowDefinition",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "default": "1.0.0",
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          },
+          "inputs": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": {
+                  "default": "json",
+                  "type": "string",
+                  "enum": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "json",
+                    "artifact",
+                    "assessment",
+                    "array"
+                  ]
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "defaultValue": {}
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "outputs": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": {
+                  "default": "json",
+                  "type": "string",
+                  "enum": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "json",
+                    "artifact",
+                    "assessment",
+                    "array"
+                  ]
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "defaultValue": {}
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraph"
+          },
+          "workspaces": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][\\w-]*$"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "mergeCheck": {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "args": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "timeoutMs": {
+                      "default": 300000,
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "command"
+                  ]
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "defaultWorkspace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "chief": {
+            "type": "object",
+            "properties": {
+              "agentRef": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxLevel": {
+                "default": "operate",
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "advise",
+                  "escalate",
+                  "operate"
+                ]
+              },
+              "triggers": {
+                "default": [
+                  "node.failed",
+                  "loop.round_needs_fix",
+                  "wait.requested",
+                  "run.stalled",
+                  "budget.exceeded",
+                  "escalation.resolved",
+                  "user.message"
+                ],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "node.failed",
+                    "loop.round_needs_fix",
+                    "wait.requested",
+                    "run.stalled",
+                    "budget.exceeded",
+                    "escalation.resolved",
+                    "user.message"
+                  ]
+                }
+              },
+              "maxInterventionsPerRun": {
+                "default": 20,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxLoopRoundExtension": {
+                "default": 2,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10
+              },
+              "budget": {
+                "type": "object",
+                "properties": {
+                  "maxTotalTokens": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "maxCostUsd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "graph"
+        ]
+      },
+      "WorkflowGraph": {
+        "$id": "#/components/schemas/WorkflowGraph",
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowNode"
+            }
+          },
+          "controlEdges": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "fromNodeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "toNodeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "when": {
+                  "$ref": "#/components/schemas/EdgeCondition"
+                },
+                "loop": {
+                  "type": "object",
+                  "properties": {
+                    "maxRounds": {
+                      "default": 3,
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 50
+                    },
+                    "onExhausted": {
+                      "default": "fail",
+                      "type": "string",
+                      "enum": [
+                        "fail",
+                        "gate",
+                        "pass_with_findings"
+                      ]
+                    }
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "fromNodeId",
+                "toNodeId"
+              ]
+            }
+          },
+          "dataEdges": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "fromNodeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "fromPort": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "toNodeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "toPort": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "delivery": {
+                  "default": "auto",
+                  "type": "string",
+                  "enum": [
+                    "auto",
+                    "inline",
+                    "artifact_ref"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "fromNodeId",
+                "fromPort",
+                "toNodeId",
+                "toPort"
+              ]
+            }
+          }
+        },
+        "required": [
+          "nodes"
+        ]
+      },
+      "WorkflowNode": {
+        "$id": "#/components/schemas/WorkflowNode",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "inputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "outputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "writeScopes": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxTechnicalRetries": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "workspace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isolation": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "shared",
+                  "worktree"
+                ]
+              },
+              "enforceWriteScopes": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "agent"
+              },
+              "parallel": {
+                "type": "object",
+                "properties": {
+                  "itemsPort": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "maxConcurrency": {
+                    "default": 4,
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "failurePolicy": {
+                    "default": "settle_all",
+                    "type": "string",
+                    "enum": [
+                      "fail_fast",
+                      "settle_all"
+                    ]
+                  }
+                },
+                "required": [
+                  "itemsPort"
+                ]
+              },
+              "agentRef": {
+                "type": "string",
+                "minLength": 1
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "agentType": {
+                "type": "string"
+              },
+              "modelId": {
+                "type": "string"
+              },
+              "modeId": {
+                "type": "string"
+              },
+              "effort": {
+                "type": "string",
+                "minLength": 1
+              },
+              "goal": {
+                "type": "string",
+                "minLength": 1
+              },
+              "acceptanceCriteria": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "constraints": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "promptTemplate": {
+                "type": "string"
+              },
+              "producesAssessment": {
+                "default": false,
+                "type": "boolean"
+              },
+              "contextBudget": {
+                "type": "object",
+                "properties": {
+                  "initialBundleBytes": {
+                    "default": 32768,
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "pageReadBytes": {
+                    "default": 8192,
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "stageReadQuotaBytes": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "sessionTokenBudget": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                }
+              },
+              "readWorkspaces": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "kind",
+              "role",
+              "goal"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "inputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "outputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "writeScopes": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxTechnicalRetries": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "workspace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isolation": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "shared",
+                  "worktree"
+                ]
+              },
+              "enforceWriteScopes": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "script"
+              },
+              "parallel": {
+                "type": "object",
+                "properties": {
+                  "itemsPort": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "maxConcurrency": {
+                    "default": 4,
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "failurePolicy": {
+                    "default": "settle_all",
+                    "type": "string",
+                    "enum": [
+                      "fail_fast",
+                      "settle_all"
+                    ]
+                  }
+                },
+                "required": [
+                  "itemsPort"
+                ]
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "args": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "timeoutMs": {
+                "default": 60000,
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "producesAssessment": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "kind",
+              "command"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "inputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "outputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "writeScopes": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxTechnicalRetries": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "workspace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isolation": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "shared",
+                  "worktree"
+                ]
+              },
+              "enforceWriteScopes": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "gate"
+              },
+              "prompt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "options": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "label"
+                  ]
+                }
+              },
+              "requiredRole": {
+                "type": "string"
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "kind",
+              "prompt"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "inputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "outputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "writeScopes": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxTechnicalRetries": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "workspace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isolation": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "shared",
+                  "worktree"
+                ]
+              },
+              "enforceWriteScopes": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "loop"
+              },
+              "defaultAgentRef": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxRounds": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              },
+              "continueWhen": {
+                "$ref": "#/components/schemas/EdgeCondition"
+              },
+              "onExhausted": {
+                "default": "fail",
+                "type": "string",
+                "enum": [
+                  "fail",
+                  "gate",
+                  "pass_with_findings"
+                ]
+              },
+              "bodyGraph": {
+                "$ref": "#/components/schemas/WorkflowGraph"
+              },
+              "carry": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "fromNodeId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "fromPort": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "toPort": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "fromNodeId",
+                    "fromPort",
+                    "toPort"
+                  ]
+                }
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "deciderId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "backEdgeId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "deciderId",
+                      "backEdgeId"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "subflowOf": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "digest": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "subflowOf",
+                      "digest"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "kind",
+              "continueWhen",
+              "bodyGraph"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "inputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "outputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "writeScopes": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxTechnicalRetries": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "workspace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isolation": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "shared",
+                  "worktree"
+                ]
+              },
+              "enforceWriteScopes": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "parallel"
+              },
+              "defaultAgentRef": {
+                "type": "string",
+                "minLength": 1
+              },
+              "itemsPort": {
+                "default": "items",
+                "type": "string",
+                "minLength": 1
+              },
+              "maxConcurrency": {
+                "default": 4,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "failurePolicy": {
+                "default": "settle_all",
+                "type": "string",
+                "enum": [
+                  "fail_fast",
+                  "settle_all"
+                ]
+              },
+              "itemGraph": {
+                "$ref": "#/components/schemas/WorkflowGraph"
+              },
+              "origin": {
+                "type": "object",
+                "properties": {
+                  "nodeKind": {
+                    "type": "string",
+                    "enum": [
+                      "agent",
+                      "script",
+                      "subflow"
+                    ]
+                  }
+                },
+                "required": [
+                  "nodeKind"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "kind",
+              "itemGraph"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "inputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "outputs": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "default": "json",
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "json",
+                        "artifact",
+                        "assessment",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "defaultValue": {}
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "writeScopes": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxTechnicalRetries": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "workspace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isolation": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "shared",
+                  "worktree"
+                ]
+              },
+              "enforceWriteScopes": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "subflow"
+              },
+              "parallel": {
+                "type": "object",
+                "properties": {
+                  "itemsPort": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "maxConcurrency": {
+                    "default": 4,
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "failurePolicy": {
+                    "default": "settle_all",
+                    "type": "string",
+                    "enum": [
+                      "fail_fast",
+                      "settle_all"
+                    ]
+                  }
+                },
+                "required": [
+                  "itemsPort"
+                ]
+              },
+              "workflowId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "snapshot": {
+                "type": "object",
+                "properties": {
+                  "workflowId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "digest": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "inputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "type": {
+                          "default": "json",
+                          "type": "string",
+                          "enum": [
+                            "string",
+                            "number",
+                            "boolean",
+                            "json",
+                            "artifact",
+                            "assessment",
+                            "array"
+                          ]
+                        },
+                        "required": {
+                          "default": true,
+                          "type": "boolean"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "defaultValue": {}
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  "outputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "type": {
+                          "default": "json",
+                          "type": "string",
+                          "enum": [
+                            "string",
+                            "number",
+                            "boolean",
+                            "json",
+                            "artifact",
+                            "assessment",
+                            "array"
+                          ]
+                        },
+                        "required": {
+                          "default": true,
+                          "type": "boolean"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "defaultValue": {}
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  "graph": {
+                    "$ref": "#/components/schemas/WorkflowGraph"
+                  }
+                },
+                "required": [
+                  "workflowId",
+                  "digest",
+                  "name",
+                  "inputs",
+                  "outputs",
+                  "graph"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "kind"
+            ]
+          }
+        ]
+      },
+      "EdgeCondition": {
+        "$id": "#/components/schemas/EdgeCondition",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "always"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "verdict_is"
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "NEEDS_FIX",
+                  "FAIL",
+                  "BLOCKED"
+                ]
+              },
+              "sourceNodeId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "verdict"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "verdict_in"
+              },
+              "verdicts": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "FAIL",
+                    "BLOCKED"
+                  ]
+                }
+              },
+              "sourceNodeId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "verdicts"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "port_equals"
+              },
+              "port": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "sourceNodeId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "port",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "port_truthy"
+              },
+              "port": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourceNodeId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "port"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "port_compare"
+              },
+              "port": {
+                "type": "string",
+                "minLength": 1
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "==",
+                  "!=",
+                  ">",
+                  ">=",
+                  "<",
+                  "<="
+                ]
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "measure": {
+                "type": "string",
+                "enum": [
+                  "value",
+                  "length"
+                ]
+              },
+              "sourceNodeId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "port",
+              "op",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "all"
+              },
+              "conditions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EdgeCondition"
+                }
+              }
+            },
+            "required": [
+              "kind",
+              "conditions"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "any"
+              },
+              "conditions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EdgeCondition"
+                }
+              }
+            },
+            "required": [
+              "kind",
+              "conditions"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "otherwise"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        ]
+      },
+      "AgentProfile": {
+        "$id": "#/components/schemas/AgentProfile",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "version": {
+            "default": "1",
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^@\\s]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "charter": {
+            "type": "string",
+            "minLength": 1
+          },
+          "instructions": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skills": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "runtime": {
+            "default": {
+              "adapter": "acp"
+            },
+            "type": "object",
+            "properties": {
+              "adapter": {
+                "default": "acp",
+                "type": "string",
+                "minLength": 1
+              },
+              "agentType": {
+                "type": "string",
+                "minLength": 1
+              },
+              "modelId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "modeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effort": {
+                "type": "string",
+                "minLength": 1
+              },
+              "options": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "charter"
+        ]
+      },
+      "SaveWorkflowBody": {
+        "$id": "#/components/schemas/SaveWorkflowBody",
+        "type": "object",
+        "properties": {
+          "definition": {},
+          "layout": {
+            "$ref": "#/components/schemas/CanvasLayout"
+          }
+        },
+        "required": [
+          "definition"
+        ]
+      },
+      "CanvasLayout": {
+        "$id": "#/components/schemas/CanvasLayout",
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ]
+        }
+      },
+      "WorkspaceBindings": {
+        "$id": "#/components/schemas/WorkspaceBindings",
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "StartRunBody": {
+        "$id": "#/components/schemas/StartRunBody",
+        "type": "object",
+        "properties": {
+          "workflowId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "inputs": {
+            "default": {},
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "workspaces": {
+            "default": {},
+            "$ref": "#/components/schemas/WorkspaceBindings"
+          }
+        },
+        "required": [
+          "workflowId"
+        ]
+      },
+      "CreateWorkspaceBody": {
+        "$id": "#/components/schemas/CreateWorkspaceBody",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "isolation": {
+            "type": "string",
+            "enum": [
+              "in-place",
+              "git-worktree"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "UpdateWorkspaceBody": {
+        "$id": "#/components/schemas/UpdateWorkspaceBody",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "isolation": {
+            "type": "string",
+            "enum": [
+              "in-place",
+              "git-worktree"
+            ]
+          }
+        }
+      },
+      "RespondBody": {
+        "$id": "#/components/schemas/RespondBody",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            ]
+          },
+          "responderId": {
+            "default": "web",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "requestId",
+          "answer"
+        ]
+      },
+      "RerunBody": {
+        "$id": "#/components/schemas/RerunBody",
+        "type": "object",
+        "properties": {
+          "nodeId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scopeKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "nodeId"
+        ]
+      },
+      "ChiefMessageBody": {
+        "$id": "#/components/schemas/ChiefMessageBody",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          },
+          "authorId": {
+            "default": "web",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "CreateConversationBody": {
+        "$id": "#/components/schemas/CreateConversationBody",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "object",
+            "properties": {
+              "workdir": {
+                "type": "string",
+                "minLength": 1
+              },
+              "agentType": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "cliType": {
+                        "type": "string",
+                        "const": "custom"
+                      },
+                      "agentType": {
+                        "type": "string"
+                      },
+                      "command": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "args": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "cliType",
+                      "agentType",
+                      "command"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "cliType": {
+                        "type": "string",
+                        "enum": [
+                          "builtin",
+                          "registry"
+                        ]
+                      },
+                      "agentType": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "executablePath": {
+                        "type": "string"
+                      },
+                      "extraArgs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "piExtensions": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "providerId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "cliType",
+                      "agentType"
+                    ]
+                  }
+                ]
+              },
+              "customCommand": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              },
+              "initialConfig": {
+                "type": "object",
+                "properties": {
+                  "modelId": {
+                    "type": "string"
+                  },
+                  "modeId": {
+                    "type": "string"
+                  },
+                  "configOptionValues": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "boolean"
+                      ]
+                    }
+                  }
+                }
+              },
+              "modelId": {
+                "type": "string"
+              },
+              "modeId": {
+                "type": "string"
+              },
+              "configOptionValues": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "boolean"
+                  ]
+                }
+              },
+              "providerId": {
+                "type": "string"
+              },
+              "extraArgs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "piExtensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mcpServers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "required": [
+              "workdir"
+            ],
+            "additionalProperties": false
+          },
+          "extensions": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateConversationBody": {
+        "$id": "#/components/schemas/UpdateConversationBody",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "extensions": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "SendTurnBody": {
+        "$id": "#/components/schemas/SendTurnBody",
+        "type": "object",
+        "properties": {
+          "content": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "extensions": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          },
+          "promptOptions": {
+            "type": "object",
+            "properties": {
+              "_meta": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/JsonValue"
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "goalControl": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "set",
+                      "pause",
+                      "resume",
+                      "clear"
+                    ]
+                  },
+                  "objective": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "CustomEventBody": {
+        "$id": "#/components/schemas/CustomEventBody",
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "data": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "name",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "PermissionResponseBody": {
+        "$id": "#/components/schemas/PermissionResponseBody",
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "const": "cancelled"
+                  }
+                },
+                "required": [
+                  "outcome"
+                ],
+                "additionalProperties": {}
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "const": "selected"
+                  },
+                  "optionId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "optionId"
+                ],
+                "additionalProperties": {}
+              }
+            ]
+          },
+          "_meta": {
+            "anyOf": [
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "additionalProperties": {}
+      },
+      "JsonValue": {
+        "$id": "#/components/schemas/JsonValue",
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "details": {},
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "updatedAtMs": {
+            "type": "integer"
+          }
+        }
+      },
+      "WorkflowRecord": {
+        "type": "object",
+        "description": "A saved workflow: its latest definition, canvas layout and remembered workspace bindings.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/WorkflowDefinition"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/CanvasLayout"
+          },
+          "workspaceBindings": {
+            "$ref": "#/components/schemas/WorkspaceBindings"
+          },
+          "createdAtMs": {
+            "type": "integer"
+          },
+          "updatedAtMs": {
+            "type": "integer"
+          }
+        }
+      },
+      "RunSummary": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "workflowId": {
+            "type": "string"
+          },
+          "workflowName": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "createdAtMs": {
+            "type": "integer"
+          },
+          "updatedAtMs": {
+            "type": "integer"
+          }
+        }
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "RUNNING",
+          "WAITING",
+          "SUCCEEDED",
+          "FAILED",
+          "CANCELLED"
+        ]
+      },
+      "RunState": {
+        "type": "object",
+        "description": "A run folded from its log: status, outputs, every scope (loop rounds and parallel items included) with its node states, attempts, assessments, context manifests, open waits, chief state and events.",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "revision": {
+            "type": "integer",
+            "description": "Sequence number of the last log entry folded in."
+          },
+          "definition": {
+            "$ref": "#/components/schemas/WorkflowDefinition"
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "outputs": {
+            "type": "object"
+          },
+          "workspaces": {
+            "type": "object",
+            "description": "Workspace binding per slot."
+          },
+          "scopes": {
+            "type": "object",
+            "description": "Scope state by scope key, e.g. `$root`, `$root/fix__loop:round_1`, `$root/pages[2]`."
+          },
+          "attempts": {
+            "type": "object",
+            "description": "Node attempts by attempt id (produced artifacts, assessment, workspace changes, error)."
+          },
+          "assessments": {
+            "type": "object",
+            "description": "Verdicts (PASS, NEEDS_FIX, FAIL, BLOCKED) with findings, by assessment id."
+          },
+          "manifests": {
+            "type": "object",
+            "description": "What each agent attempt was given, by manifest id."
+          },
+          "waitRequests": {
+            "type": "object",
+            "description": "Gate decisions and agent questions, by request id."
+          },
+          "chief": {
+            "type": "object"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "RunView": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "This server is executing the run right now."
+          },
+          "chiefAnswering": {
+            "type": "boolean"
+          },
+          "liveProgress": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Steps of attempts still executing."
+          }
+        }
+      },
+      "Workspace": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "isolation": {
+            "type": "string",
+            "enum": [
+              "in-place",
+              "git-worktree"
+            ]
+          },
+          "git": {
+            "type": "boolean"
+          },
+          "exists": {
+            "type": "boolean"
+          }
+        }
+      },
+      "NodeDataRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "namespace": {
+            "type": "string",
+            "enum": [
+              "node",
+              "run"
+            ]
+          },
+          "scopeKey": {
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "attemptId": {
+            "type": "string"
+          },
+          "collection": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "value": {}
+        }
+      },
+      "Artifact": {
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "properties": {
+              "artifactId": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "mediaType": {
+                "type": "string"
+              },
+              "sizeBytes": {
+                "type": "integer"
+              },
+              "producerRunId": {
+                "type": "string"
+              },
+              "producerNodeId": {
+                "type": "string"
+              },
+              "producerAttemptId": {
+                "type": "string"
+              },
+              "portName": {
+                "type": "string"
+              }
+            }
+          },
+          "slice": {
+            "type": "object",
+            "properties": {
+              "artifactId": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "offsetBytes": {
+                "type": "integer"
+              },
+              "readBytes": {
+                "type": "integer"
+              },
+              "totalBytes": {
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean",
+                "description": "Read on from offsetBytes + readBytes."
+              }
+            }
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "description": "A recorded agent conversation (ACP session) and its state."
+      },
+      "OpenFinding": {
+        "type": "object",
+        "required": [
+          "source",
+          "scopeKey",
+          "nodeId",
+          "severity",
+          "message",
+          "recordedAtMs"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "assessment",
+              "issue"
+            ],
+            "description": "Left by a review, or logged by a step."
+          },
+          "scopeKey": {
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "major",
+              "minor",
+              "info"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "filePath": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "NEEDS_FIX",
+              "FAIL",
+              "BLOCKED"
+            ]
+          },
+          "assessmentId": {
+            "type": "string"
+          },
+          "attemptId": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "description": "Other fields the step logged with the issue."
+          },
+          "recordedAtMs": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

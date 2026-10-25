@@ -7,7 +7,11 @@ import {
 import { webDistDir } from '@universal-agent/workflow-web';
 import { createWorkflowServer, type WorkflowServer, type WorkflowServerOptions } from './server';
 
+export * from './client';
+export * from './commands';
 export * from './errors';
+export * from './http-schemas';
+export * from './openapi';
 export * from './samples';
 export * from './security';
 export * from './server';

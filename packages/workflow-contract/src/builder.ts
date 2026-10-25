@@ -2,6 +2,7 @@ import { type ChiefPolicy, type ChiefPolicyInput, ChiefPolicySchema } from './ch
 import { compileWorkflowDefinition, type CompiledWorkflowPlan } from './dag-compiler';
 import type {
   AgentNode,
+  LoopExhaustedPolicy,
   ControlEdge,
   DataDeliveryMode,
   DataEdge,
@@ -11,11 +12,14 @@ import type {
   ParallelNode,
   PortDefinition,
   ScriptNode,
+  SubflowNode,
   WorkspaceSlot,
+  WorkspaceSlotInput,
   WorkflowDefinition,
   WorkflowGraph,
   WorkflowNode,
 } from './schema';
+import { WorkspaceSlotSchema } from './schema';
 
 export class WorkflowGraphBuilder {
   private readonly nodes: WorkflowNode[] = [];
@@ -78,6 +82,32 @@ export class WorkflowGraphBuilder {
       options: [],
       ...config,
     });
+    return this;
+  }
+
+  /** A step that runs the saved workflow `workflowId` (embedded when a run starts). */
+  addSubflow(
+    config: Omit<SubflowNode, 'kind' | 'inputs' | 'outputs' | 'writeScopes' | 'maxTechnicalRetries'> &
+      Partial<Pick<SubflowNode, 'inputs' | 'outputs' | 'writeScopes' | 'maxTechnicalRetries'>>
+  ): this {
+    this.nodes.push({ kind: 'subflow', inputs: [], outputs: [], writeScopes: [], maxTechnicalRetries: 0, ...config });
+    return this;
+  }
+
+  /**
+   * Closes a loop: from the deciding step `fromNodeId` back to the earlier step `toNodeId`,
+   * taken while `when` (on the decider's result) holds, at most `maxRounds` rounds in all.
+   */
+  loopBack(
+    fromNodeId: string,
+    toNodeId: string,
+    when: EdgeCondition,
+    loop: { maxRounds?: number; onExhausted?: LoopExhaustedPolicy } = {},
+    id?: string
+  ): this {
+    this.connectControl(fromNodeId, toNodeId, when, id ?? `loop_${fromNodeId}_to_${toNodeId}`);
+    const edge = this.controlEdges[this.controlEdges.length - 1]!;
+    edge.loop = { maxRounds: loop.maxRounds ?? 3, onExhausted: loop.onExhausted ?? 'fail' };
     return this;
   }
 
@@ -243,8 +273,8 @@ export class WorkflowBuilder extends WorkflowGraphBuilder {
   }
 
   /** Declares a workspace slot; each run binds it to a concrete directory. */
-  addWorkspace(slot: { name: string; description?: string; required?: boolean }): this {
-    this.workspaceSlots.push({ required: true, ...slot });
+  addWorkspace(slot: WorkspaceSlotInput): this {
+    this.workspaceSlots.push(WorkspaceSlotSchema.parse(slot));
     return this;
   }
 

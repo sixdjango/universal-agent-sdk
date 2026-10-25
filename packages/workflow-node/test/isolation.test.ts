@@ -81,24 +81,13 @@ describe('concurrent writers work in their own copies', () => {
     const { repo, run } = setup();
     const definition = createWorkflowBuilder('items')
       .addWorkflowInput({ name: 'items', type: 'array', required: true })
-      .addParallel({
-        id: 'each',
-        name: 'Each',
-        maxConcurrency: 4,
-        itemBody: (b) =>
-          b
-            .addScript({
-              id: 'write',
-              name: 'Write',
-              command: 'node',
-              args: js(`const item = fs.readFileSync(process.env.UA_INPUT_ITEM, 'utf8'); fs.mkdirSync('out', { recursive: true }); fs.writeFileSync('out/' + item + '.txt', item)`, 400),
-              writeScopes: ['out'],
-              inputs: [{ name: 'item', type: 'json', required: true }],
-              producesAssessment: false,
-            })
-            .connectData({ fromNodeId: '$input', fromPort: 'item', toNodeId: 'write', toPort: 'item' }),
+      .addScript({
+        id: 'write', name: 'Write', command: 'node',
+        parallel: { itemsPort: 'item', maxConcurrency: 4, failurePolicy: 'settle_all' },
+        args: js(`const item = fs.readFileSync(process.env.UA_INPUT_ITEM, 'utf8'); fs.mkdirSync('out', { recursive: true }); fs.writeFileSync('out/' + item + '.txt', item)`, 400),
+        writeScopes: ['out'], inputs: [{ name: 'item', type: 'json', required: true }], producesAssessment: false,
       })
-      .connectData({ fromNodeId: '$input', fromPort: 'items', toNodeId: 'each', toPort: 'items' })
+      .connectData({ fromNodeId: '$input', fromPort: 'items', toNodeId: 'write', toPort: 'item' })
       .buildDefinition();
     const started = Date.now();
     const done = await run(definition, { items: ['a', 'b', 'c', 'd'] });
@@ -113,7 +102,7 @@ describe('concurrent writers work in their own copies', () => {
     expect(elapsed).toBeLessThan(1_400);
   });
 
-  it('fails the step whose changes no longer apply, keeping them on a branch', async () => {
+  it('does a step whose changes clash again on the workspace as it is now', async () => {
     const { repo, run } = setup();
     const edit = (id: string, text: string, delayMs: number) => ({
       id,
@@ -125,19 +114,118 @@ describe('concurrent writers work in their own copies', () => {
       producesAssessment: false,
     });
     const definition = createWorkflowBuilder('clash')
-      .addScript(edit('first', 'first wins', 50))
-      // Declares a different scope (so the two run together) but edits the same file anyway.
-      .addScript({ ...edit('second', 'second loses', 400), writeScopes: ['other'] })
+      .addScript(edit('first', 'first', 50))
+      // Declares a different scope (so the two run together) but edits the same line anyway.
+      .addScript({ ...edit('second', 'second', 400), writeScopes: ['other'] })
+      .buildDefinition();
+    const done = await run(definition);
+    expect(done.status).toBe('SUCCEEDED');
+    // Done again on top of the first step's change, the second step's edit lands last.
+    expect(readFileSync(join(repo, 'shared.txt'), 'utf8')).toBe('line 1\nsecond\nline 3\n');
+    expect(git(repo, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('fails a step that clashes again when done again, keeping its changes on a branch', async () => {
+    const { repo, run } = setup();
+    const step = (id: string, body: string, delayMs: number) => ({
+      id,
+      name: id,
+      command: 'node',
+      args: js(body, delayMs),
+      writeScopes: [id],
+      isolation: 'worktree' as const,
+      producesAssessment: false,
+    });
+    const replace = (from: string, to: string) => `fs.writeFileSync('shared.txt', fs.readFileSync('shared.txt', 'utf8').replace('${from}', '${to}'))`;
+    const definition = createWorkflowBuilder('clash-again')
+      .addScript(step('first', replace('line 1', 'line 1 (first)'), 50))
+      // Clashes with "first" on line 1; done again, it takes long enough for "third" to change
+      // line 3 meanwhile, and clashes with that.
+      .addScript(
+        step(
+          'second',
+          `const redo = fs.readFileSync('shared.txt', 'utf8').includes('(first)'); setTimeout(() => fs.writeFileSync('shared.txt', 'line 1 (second)\\nline 2\\nline 3 (second)\\n'), redo ? 800 : 0)`,
+          300
+        )
+      )
+      .addScript(step('third', replace('line 3', 'line 3 (third)'), 700))
       .buildDefinition();
     const done = await run(definition);
     expect(done.status).toBe('FAILED');
     expect(done.scopes.$root!.nodes.first!.status).toBe('SUCCEEDED');
+    expect(done.scopes.$root!.nodes.third!.status).toBe('SUCCEEDED');
     const second = done.scopes.$root!.nodes.second!;
     expect(second.status).toBe('FAILED');
     expect(second.error).toContain('shared.txt');
     const branch = /branch (\S+)/.exec(second.error!)![1]!;
-    expect(git(repo, 'show', `${branch}:shared.txt`)).toContain('second loses');
-    expect(readFileSync(join(repo, 'shared.txt'), 'utf8')).toContain('first wins');
+    expect(git(repo, 'show', `${branch}:shared.txt`)).toContain('line 3 (second)');
+    expect(readFileSync(join(repo, 'shared.txt'), 'utf8')).toBe('line 1 (first)\nline 2\nline 3 (third)\n');
+    expect(git(repo, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('checks merged code before it lands, and does a step again when edits break each other', async () => {
+    const { repo, run } = setup();
+    writeFileSync(join(repo, 'lib.txt'), 'foo');
+    // "use.txt" must call what "lib.txt" defines: a clean line merge can still break that.
+    const check = `const fs = require('node:fs'); if (fs.existsSync('use.txt') && fs.readFileSync('use.txt', 'utf8') !== fs.readFileSync('lib.txt', 'utf8')) { console.error('use.txt calls ' + fs.readFileSync('use.txt', 'utf8') + ', which lib.txt does not define'); process.exit(1); }`;
+    const definition = createWorkflowBuilder('semantic')
+      .addWorkspace({ name: 'main', mergeCheck: { command: 'node', args: ['-e', check] } })
+      .addScript({
+        id: 'rename', name: 'Rename', command: 'node', args: js(`fs.writeFileSync('lib.txt', 'bar')`, 50),
+        writeScopes: ['lib.txt'], producesAssessment: false,
+      })
+      .addScript({
+        id: 'use', name: 'Use', command: 'node', args: js(`fs.writeFileSync('use.txt', fs.readFileSync('lib.txt', 'utf8'))`, 400),
+        writeScopes: ['use.txt'], producesAssessment: false,
+      })
+      .buildDefinition();
+    const done = await run(definition);
+    expect(done.status).toBe('SUCCEEDED');
+    // Without the check "use.txt" would land calling "foo"; done again it sees the rename.
+    expect(readFileSync(join(repo, 'use.txt'), 'utf8')).toBe('bar');
+    expect(readFileSync(join(repo, 'lib.txt'), 'utf8')).toBe('bar');
+    expect(git(repo, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('merges edits to different lines of one file three ways', async () => {
+    const { repo, run } = setup();
+    // Neighbouring lines: each step's patch context covers the other's edit.
+    const edit = (id: string, from: string, to: string, delayMs: number) => ({
+      id,
+      name: id,
+      command: 'node',
+      args: js(`fs.writeFileSync('shared.txt', fs.readFileSync('shared.txt', 'utf8').replace('${from}', '${to}'))`, delayMs),
+      writeScopes: [id],
+      isolation: 'worktree' as const,
+      producesAssessment: false,
+    });
+    const definition = createWorkflowBuilder('neighbours')
+      .addScript(edit('top', 'line 1', 'line 1 (top)', 50))
+      .addScript(edit('bottom', 'line 3', 'line 3 (bottom)', 400))
+      .buildDefinition();
+    const done = await run(definition);
+    expect(done.status).toBe('SUCCEEDED');
+    expect(readFileSync(join(repo, 'shared.txt'), 'utf8')).toBe('line 1 (top)\nline 2\nline 3 (bottom)\n');
+    expect(git(repo, 'diff', '--cached', '--name-only')).toBe('');
+  });
+
+  it.runIf(process.platform === 'darwin')('clones ignored build output instead of linking it, so building in a copy leaves the original alone', async () => {
+    const { repo, run } = setup();
+    const definition = createWorkflowBuilder('build')
+      .addScript({
+        id: 'build',
+        name: 'Build',
+        command: 'node',
+        args: js(`fs.writeFileSync('node_modules/dep/index.txt', 'rebuilt'); fs.writeFileSync('out.txt', 'built')`, 0),
+        writeScopes: ['out.txt'],
+        isolation: 'worktree',
+        producesAssessment: false,
+      })
+      .buildDefinition();
+    const done = await run(definition);
+    expect(done.status).toBe('SUCCEEDED');
+    expect(readFileSync(join(repo, 'out.txt'), 'utf8')).toBe('built');
+    expect(readFileSync(join(repo, 'node_modules', 'dep', 'index.txt'), 'utf8')).toBe('dependency');
     expect(git(repo, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
   });
 

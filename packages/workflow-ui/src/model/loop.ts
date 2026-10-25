@@ -1,4 +1,5 @@
-import type { AssessmentVerdict, LoopNode, ParallelNode, WorkflowNode } from '@universal-agent/workflow-contract';
+import { type AssessmentVerdict, edgeConditionSource, type LoopNode, type ParallelNode, type WorkflowNode } from '@universal-agent/workflow-contract';
+import { conditionText } from './conditions';
 import type { WorkflowRunState } from '@universal-agent/workflow-runtime';
 
 /** How one loop round ended (or that it is still going). */
@@ -60,7 +61,7 @@ export function describeLoop(
   options: { run?: WorkflowRunState | null; scopeKey?: string } = {}
 ): LoopSummary {
   const condition = loop.continueWhen;
-  const deciderId = (condition.kind !== 'always' ? condition.sourceNodeId : undefined) ?? bodyOrder[bodyOrder.length - 1];
+  const deciderId = edgeConditionSource(condition) ?? bodyOrder[bodyOrder.length - 1];
   const decider = loop.bodyGraph.nodes.find((n) => n.id === deciderId);
   const who = decider ? `“${decider.name}”` : 'the last step';
 
@@ -69,6 +70,7 @@ export function describeLoop(
   let endsWhen: string | undefined;
   switch (condition.kind) {
     case 'always':
+    case 'otherwise':
       repeatWhen = 'every round, until the limit';
       repeatLabel = 'always';
       break;
@@ -94,6 +96,17 @@ export function describeLoop(
     case 'port_truthy':
       repeatWhen = `${who}'s ${condition.port} is set`;
       repeatLabel = condition.port;
+      endsWhen = 'otherwise it finishes';
+      break;
+    case 'port_compare':
+      repeatWhen = `${who}'s ${conditionText(condition)}`;
+      repeatLabel = conditionText(condition);
+      endsWhen = 'otherwise it finishes';
+      break;
+    case 'all':
+    case 'any':
+      repeatWhen = conditionText(condition);
+      repeatLabel = conditionText(condition);
       endsWhen = 'otherwise it finishes';
       break;
   }
@@ -154,6 +167,6 @@ export function describeContainerRule(container: LoopNode | ParallelNode, bodyOr
 export function isLoopDecider(container: WorkflowNode | null, nodeId: string, bodyOrder: readonly string[]): boolean {
   if (!container || container.kind !== 'loop') return false;
   const condition = container.continueWhen;
-  const decider = (condition.kind !== 'always' ? condition.sourceNodeId : undefined) ?? bodyOrder[bodyOrder.length - 1];
+  const decider = edgeConditionSource(condition) ?? bodyOrder[bodyOrder.length - 1];
   return decider === nodeId;
 }

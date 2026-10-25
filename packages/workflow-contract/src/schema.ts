@@ -32,8 +32,8 @@ export const ContextBudgetConfigSchema = z.object({
   initialBundleBytes: z.number().int().positive().default(32 * 1024),
   /** Max bytes per paginated artifact read (default 8 KiB). */
   pageReadBytes: z.number().int().positive().default(8 * 1024),
-  /** Max cumulative bytes read via on-demand pagination in a single attempt (default 128 KiB). */
-  stageReadQuotaBytes: z.number().int().positive().default(128 * 1024),
+  /** Optional max cumulative bytes read via pagination in one attempt. Omit for no limit. */
+  stageReadQuotaBytes: z.number().int().positive().optional(),
   /** Optional native session input token budget warning/limit. */
   sessionTokenBudget: z.number().int().positive().optional(),
 });
@@ -45,10 +45,21 @@ export type ContextBudgetConfig = z.infer<typeof ContextBudgetConfigSchema>;
 export const AssessmentVerdictSchema = z.enum(['PASS', 'NEEDS_FIX', 'FAIL', 'BLOCKED']);
 export type AssessmentVerdict = z.infer<typeof AssessmentVerdictSchema>;
 
-/**
- * Deterministic predicate on control edges or loop continuation conditions.
- */
-export const EdgeConditionSchema = z.discriminatedUnion('kind', [
+type ConditionValue = string | number | boolean | null;
+
+/** Deterministic predicate on control edges or loop continuation conditions. */
+export type EdgeCondition =
+  | { kind: 'always' }
+  | { kind: 'verdict_is'; verdict: AssessmentVerdict; sourceNodeId?: string }
+  | { kind: 'verdict_in'; verdicts: AssessmentVerdict[]; sourceNodeId?: string }
+  | { kind: 'port_equals'; port: string; value: ConditionValue; sourceNodeId?: string }
+  | { kind: 'port_truthy'; port: string; sourceNodeId?: string }
+  | { kind: 'port_compare'; port: string; op: '==' | '!=' | '>' | '>=' | '<' | '<='; value: ConditionValue; measure?: 'value' | 'length'; sourceNodeId?: string }
+  | { kind: 'all'; conditions: EdgeCondition[] }
+  | { kind: 'any'; conditions: EdgeCondition[] }
+  | { kind: 'otherwise' };
+
+export const EdgeConditionSchema: z.ZodType<EdgeCondition> = z.lazy(() => z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('always'),
   }),
@@ -73,8 +84,74 @@ export const EdgeConditionSchema = z.discriminatedUnion('kind', [
     port: z.string().min(1),
     sourceNodeId: z.string().optional(),
   }),
-]);
-export type EdgeCondition = z.infer<typeof EdgeConditionSchema>;
+  /**
+   * Compares an output with a value: numbers (or, with `measure: 'length'`, the length of a list
+   * or text) by size, anything with `==` / `!=`. Ordering a non-number is false.
+   */
+  z.object({
+    kind: z.literal('port_compare'),
+    port: z.string().min(1),
+    op: z.enum(['==', '!=', '>', '>=', '<', '<=']),
+    value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    measure: z.enum(['value', 'length']).optional(),
+    sourceNodeId: z.string().optional(),
+  }),
+  /** Every condition holds (each reads its own `sourceNodeId`, else the edge's step). */
+  z.object({
+    kind: z.literal('all'),
+    conditions: z.array(EdgeConditionSchema).min(1),
+  }),
+  /** At least one condition holds. */
+  z.object({
+    kind: z.literal('any'),
+    conditions: z.array(EdgeConditionSchema).min(1),
+  }),
+  /** Taken when none of the other conditional edges leaving the same node is (the "else" branch). */
+  z.object({
+    kind: z.literal('otherwise'),
+  }),
+]));
+/** A condition that reads one step's verdict or output (everything but always/otherwise/all/any). */
+export type LeafEdgeCondition = Exclude<EdgeCondition, { kind: 'always' | 'otherwise' | 'all' | 'any' }>;
+
+/**
+ * The step a condition reads, when it names one (`always` / `otherwise` read none; for `all` /
+ * `any`, the first condition that names one).
+ */
+export function edgeConditionSource(condition: EdgeCondition | undefined): string | undefined {
+  return edgeConditionSources(condition)[0];
+}
+
+/** Every step a condition names, compound conditions included, in order. */
+export function edgeConditionSources(condition: EdgeCondition | undefined): string[] {
+  if (!condition) return [];
+  if (condition.kind === 'all' || condition.kind === 'any') return [...new Set(condition.conditions.flatMap(edgeConditionSources))];
+  return 'sourceNodeId' in condition && condition.sourceNodeId ? [condition.sourceNodeId] : [];
+}
+
+/** The same condition with `sourceNodeId` filled in wherever it reads the step it belongs to. */
+export function withConditionSource(condition: EdgeCondition, sourceNodeId: string): EdgeCondition {
+  if (condition.kind === 'all' || condition.kind === 'any') {
+    return { ...condition, conditions: condition.conditions.map((c) => withConditionSource(c, sourceNodeId)) };
+  }
+  if (condition.kind === 'always' || condition.kind === 'otherwise') return condition;
+  return condition.sourceNodeId ? condition : { ...condition, sourceNodeId };
+}
+
+export const LoopExhaustedPolicySchema = z.enum(['fail', 'gate', 'pass_with_findings']);
+export type LoopExhaustedPolicy = z.infer<typeof LoopExhaustedPolicySchema>;
+
+/**
+ * Makes a control edge a loop's way back: it leaves the step whose result decides and returns
+ * to an earlier step, and every step on the way round repeats while its `when` holds.
+ */
+export const LoopBackSchema = z.object({
+  /** Rounds at most, the first one included. */
+  maxRounds: z.number().int().min(1).max(50).default(3),
+  /** When the last round still asks for another: fail, ask a human, or carry on with the findings. */
+  onExhausted: LoopExhaustedPolicySchema.default('fail'),
+});
+export type LoopBack = z.infer<typeof LoopBackSchema>;
 
 /**
  * Control Edge: defines execution order and conditional branching.
@@ -84,6 +161,8 @@ export const ControlEdgeSchema = z.object({
   fromNodeId: z.string().min(1),
   toNodeId: z.string().min(1),
   when: EdgeConditionSchema.optional(),
+  /** Set on the edge that closes a loop (from the deciding step back to an earlier step). */
+  loop: LoopBackSchema.optional(),
 });
 export type ControlEdge = z.infer<typeof ControlEdgeSchema>;
 
@@ -112,6 +191,15 @@ export type WorkspaceIsolationMode = z.infer<typeof WorkspaceIsolationModeSchema
 /**
  * Base properties shared by all workflow nodes.
  */
+/** Per-item execution. Port declarations describe ONE invocation; the selected input
+ * and every output become arrays at the graph boundary. Omit to execute once. */
+export const NodeParallelSchema = z.object({
+  itemsPort: z.string().min(1),
+  maxConcurrency: z.number().int().positive().default(4),
+  failurePolicy: z.enum(['fail_fast', 'settle_all']).default('settle_all'),
+});
+export type NodeParallel = z.infer<typeof NodeParallelSchema>;
+
 const BaseNodeFields = {
   id: z.string().min(1),
   name: z.string().min(1),
@@ -141,6 +229,7 @@ const BaseNodeFields = {
 export const AgentNodeSchema = z.object({
   ...BaseNodeFields,
   kind: z.literal('agent'),
+  parallel: NodeParallelSchema.optional(),
   /**
    * Agent profile that performs this node (`"<agentId>"` or `"<agentId>@<version>"`).
    * Falls back to the nearest container's `defaultAgentRef`, then to `role`/`agentType`.
@@ -175,6 +264,7 @@ export type AgentNode = z.infer<typeof AgentNodeSchema>;
 export const ScriptNodeSchema = z.object({
   ...BaseNodeFields,
   kind: z.literal('script'),
+  parallel: NodeParallelSchema.optional(),
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
   /** Working directory relative to the node's workspace root. */
@@ -224,8 +314,57 @@ export interface LoopNode {
   defaultAgentRef?: string;
   maxRounds: number;
   continueWhen: EdgeCondition;
-  onExhausted: 'fail' | 'gate' | 'pass_with_findings';
+  onExhausted: LoopExhaustedPolicy;
   bodyGraph: WorkflowGraph;
+  /**
+   * Values a round hands to the next: before round 2+, the round's `$input.toPort` is set to
+   * the previous round's `fromNodeId.fromPort` (absent in round 1).
+   */
+  carry?: LoopCarry[];
+  /**
+   * Set when the compiler made this loop: from a way back (`lowerCycles`),
+   * or from a sub-flow step, which runs its workflow once (`embedSubflows`).
+   */
+  origin?: { deciderId: string; backEdgeId: string } | { subflowOf: string; digest: string };
+}
+
+/** The workflow a sub-flow step runs, frozen when the run starts (see `resolveSubflows`). */
+export interface SubflowSnapshot {
+  workflowId: string;
+  digest: string;
+  name: string;
+  inputs: PortDefinition[];
+  outputs: PortDefinition[];
+  graph: WorkflowGraph;
+}
+
+/**
+ * 4. Sub-flow Node: runs another saved workflow as one step. Its inputs and outputs are that
+ * workflow's; hosts embed the workflow (`snapshot`) when a run starts, so the run keeps
+ * exactly what it executed even if the workflow changes later.
+ */
+export interface SubflowNode {
+  id: string;
+  name: string;
+  description?: string;
+  inputs: PortDefinition[];
+  outputs: PortDefinition[];
+  writeScopes: string[];
+  maxTechnicalRetries: number;
+  workspace?: string;
+  isolation?: WorkspaceIsolationMode;
+  enforceWriteScopes?: boolean;
+  kind: 'subflow';
+  parallel?: NodeParallel;
+  /** Saved workflow to run; unset while the step is being drawn. */
+  workflowId?: string;
+  snapshot?: SubflowSnapshot;
+}
+
+export interface LoopCarry {
+  fromNodeId: string;
+  fromPort: string;
+  toPort: string;
 }
 
 export interface ParallelNode {
@@ -248,9 +387,11 @@ export interface ParallelNode {
   maxConcurrency: number;
   failurePolicy: 'fail_fast' | 'settle_all';
   itemGraph: WorkflowGraph;
+  /** Compiler-generated per-item execution of an ordinary node. */
+  origin?: { nodeKind: 'agent' | 'script' | 'subflow' };
 }
 
-export type WorkflowNode = AgentNode | ScriptNode | GateNode | LoopNode | ParallelNode;
+export type WorkflowNode = AgentNode | ScriptNode | GateNode | LoopNode | ParallelNode | SubflowNode;
 
 export interface WorkflowGraph {
   nodes: WorkflowNode[];
@@ -273,8 +414,34 @@ export const LoopNodeSchema: z.ZodType<LoopNode> = z.lazy(() =>
     defaultAgentRef: z.string().min(1).optional(),
     maxRounds: z.number().int().min(1).max(50).default(3),
     continueWhen: EdgeConditionSchema,
-    onExhausted: z.enum(['fail', 'gate', 'pass_with_findings']).default('fail'),
+    onExhausted: LoopExhaustedPolicySchema.default('fail'),
     bodyGraph: WorkflowGraphSchema,
+    carry: z.array(z.object({ fromNodeId: z.string().min(1), fromPort: z.string().min(1), toPort: z.string().min(1) })).optional(),
+    origin: z
+      .union([
+        z.object({ deciderId: z.string().min(1), backEdgeId: z.string().min(1) }),
+        z.object({ subflowOf: z.string().min(1), digest: z.string().min(1) }),
+      ])
+      .optional(),
+  })
+);
+
+export const SubflowNodeSchema: z.ZodType<SubflowNode> = z.lazy(() =>
+  z.object({
+    ...BaseNodeFields,
+    kind: z.literal('subflow'),
+    parallel: NodeParallelSchema.optional(),
+    workflowId: z.string().min(1).optional(),
+    snapshot: z
+      .object({
+        workflowId: z.string().min(1),
+        digest: z.string().min(1),
+        name: z.string(),
+        inputs: z.array(PortDefinitionSchema),
+        outputs: z.array(PortDefinitionSchema),
+        graph: WorkflowGraphSchema,
+      })
+      .optional(),
   })
 );
 
@@ -287,6 +454,7 @@ export const ParallelNodeSchema: z.ZodType<ParallelNode> = z.lazy(() =>
     maxConcurrency: z.number().int().min(1).default(4),
     failurePolicy: z.enum(['fail_fast', 'settle_all']).default('settle_all'),
     itemGraph: WorkflowGraphSchema,
+    origin: z.object({ nodeKind: z.enum(['agent', 'script', 'subflow']) }).optional(),
   })
 );
 
@@ -297,6 +465,7 @@ export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(() =>
     GateNodeSchema,
     LoopNodeSchema,
     ParallelNodeSchema,
+    SubflowNodeSchema,
   ])
 );
 
@@ -304,12 +473,29 @@ export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(() =>
  * A named placeholder for a directory the workflow works in. Nodes refer to slots by name;
  * each run binds every slot to a concrete workspace, so one workflow can run on any project.
  */
+/**
+ * A command that checks merged code, such as `pnpm typecheck`. Edits that merge cleanly line
+ * by line can still break each other (one step renames what another starts calling).
+ */
+export const WorkspaceMergeCheckSchema = z.object({
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  timeoutMs: z.number().int().positive().default(300_000),
+});
+export type WorkspaceMergeCheck = z.infer<typeof WorkspaceMergeCheckSchema>;
+
 export const WorkspaceSlotSchema = z.object({
   name: z.string().regex(/^[A-Za-z_][\w-]*$/, 'Slot names use letters, digits, "_" and "-"'),
   description: z.string().optional(),
   required: z.boolean().default(true),
+  /**
+   * Runs, in the step's copy, when a step's changes were merged with changes other steps made
+   * meanwhile; they land only if it passes, and a failure counts as a merge conflict.
+   */
+  mergeCheck: WorkspaceMergeCheckSchema.optional(),
 });
 export type WorkspaceSlot = z.infer<typeof WorkspaceSlotSchema>;
+export type WorkspaceSlotInput = z.input<typeof WorkspaceSlotSchema>;
 
 /** Slot used by workflows that declare none; it binds to the host's working directory. */
 export const IMPLICIT_WORKSPACE_SLOT = 'main';

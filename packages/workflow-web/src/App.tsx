@@ -3,6 +3,7 @@ import {
   type WorkflowNode,
   type WorkflowValidationIssue,
   validateWorkflowDefinition,
+  withEmbeddedSubflows,
 } from '@universal-agent/workflow-contract';
 import { computeScopeReadyNodeIds } from '@universal-agent/workflow-runtime';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -10,6 +11,7 @@ import {
   addNode,
   addPort,
   buildCanvasModel,
+  buildTraceModel,
   type CanvasActions,
   CanvasActionsContext,
   CheckIcon,
@@ -20,6 +22,7 @@ import {
   containerInstanceKeys,
   createBlankWorkflow,
   describeLoop,
+  expandLoopIntoCycle,
   describeRun,
   graphAt,
   INPUTS_NODE_ID,
@@ -28,8 +31,11 @@ import {
   layoutKey,
   Menu,
   type NewNodeKind,
+  NodeExecutionDetails,
+  type TraceSpan,
   OUTPUTS_NODE_ID,
   removeEdge,
+  setSubflowWorkflow,
   TraceView,
   updateNode,
   updateWorkflowMeta,
@@ -41,6 +47,8 @@ import {
   type AgentListing,
   type AgentRuntimeInfo,
   api,
+  conversationReader,
+  nodeDataReader,
   type CanvasLayout,
   type RunSummary,
   type WorkflowRecord,
@@ -55,6 +63,21 @@ import { readRoute, type Route, writeRoute } from './routing';
 
 export function App() {
   const [route, setRoute] = useState<Route>(readRoute);
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    const saved = window.localStorage.getItem('workflow.theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  });
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      window.localStorage.setItem('workflow.theme', next);
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
   const [workflows, setWorkflows] = useState<WorkflowSummary[] | null>(null);
   const [record, setRecord] = useState<WorkflowRecord | null>(null);
   const [agents, setAgents] = useState<AgentListing[]>([]);
@@ -67,6 +90,7 @@ export function App() {
   const [artifact, setArtifact] = useState<{ title: string; content: string } | null>(null);
   const [runView, setRunView] = useState<'trace' | 'canvas'>('trace');
   const [toast, setToast] = useState<string | null>(null);
+  const [toastTone, setToastTone] = useState<'error' | 'info'>('error');
   const toastTimer = useRef<number>(0);
 
   // Editing: a new unsaved workflow, or a draft on top of the saved one, plus undo history.
@@ -78,13 +102,17 @@ export function App() {
   // Nested graph on screen (container ids from the root) and the run instance chosen per level.
   const [scopePath, setScopePath] = useState<string[]>([]);
   const [instanceChoice, setInstanceChoice] = useState<Record<string, number>>({});
+  /** Loops drawn as cycles: the round each shows in the run view (default: the latest). */
+  const [loopRounds, setLoopRounds] = useState<Record<string, number>>({});
   const lastEdit = useRef<{ key?: string; at: number }>({ at: 0 });
 
-  const fail = useCallback((err: unknown) => {
-    setToast(typeof err === 'string' ? err : describeError(err));
+  const notify = useCallback((message: string, tone: 'error' | 'info') => {
+    setToast(message);
+    setToastTone(tone);
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 6000);
   }, []);
+  const fail = useCallback((err: unknown) => notify(typeof err === 'string' ? err : describeError(err), 'error'), [notify]);
 
   const loadWorkspaces = useCallback(async () => {
     try {
@@ -123,6 +151,7 @@ export function App() {
       setInspect(null);
       setScopePath([]);
       setInstanceChoice({});
+      setLoopRounds({});
     },
     [dirty, resetEditing]
   );
@@ -190,7 +219,10 @@ export function App() {
   }, [editable, definition]);
 
   // Leave a nested graph that no longer exists (e.g. its container was removed or undone).
-  const shownDefinition = run?.definition ?? definition;
+  // Runs show sub-flows as the scopes they ran in (embedded when the run started).
+  const runDefinition = useMemo(() => (run?.definition ? withEmbeddedSubflows(run.definition) : null), [run?.definition]);
+  const shownDefinition = runDefinition ?? definition;
+  const workflowNames = useMemo(() => Object.fromEntries((workflows ?? []).map((w) => [w.id, w.name])), [workflows]);
   /** A step's name wherever it sits in the graph (the chief refers to nested steps by id). */
   const nodeNameAnywhere = useCallback(
     (nodeId: string) => {
@@ -222,7 +254,7 @@ export function App() {
     let key = '$root';
     try {
       scopePath.forEach((id, depth) => {
-        const node = containerAt(run.definition, scopePath.slice(0, depth + 1))!;
+        const node = containerAt(runDefinition!, scopePath.slice(0, depth + 1))!;
         const instances = containerInstanceKeys(run, `${key}/${id}`);
         const chosen = instanceChoice[scopePath.slice(0, depth + 1).join('/')];
         const index = chosen ?? (node.kind === 'loop' ? Math.max(0, instances.length - 1) : 0);
@@ -232,7 +264,7 @@ export function App() {
       return '$root';
     }
     return key;
-  }, [run, scopePath, instanceChoice]);
+  }, [run, runDefinition, scopePath, instanceChoice]);
 
   /** Records an edit; consecutive edits of one field within 1.5 s share an undo step. */
   const definitionRef = useRef(definition);
@@ -360,28 +392,54 @@ export function App() {
     if (!definition) return null;
     try {
       return buildCanvasModel({
-        definition,
+        definition: runDefinition ?? definition,
         run,
         runActive: stream.active,
+        liveProgress: stream.liveProgress,
         layout,
         agentNames,
         agentRuntimes,
         editable,
         issues,
         selectedEdgeId: inspect?.type === 'edge' ? inspect.edgeId : null,
+        selectedNodeId: inspect?.type === 'node' ? inspect.nodeId : null,
         path: scopePath,
         scopeKey,
+        loopRounds,
+        workflowNames,
       });
     } catch {
       // The nested graph vanished mid-edit; the effect above climbs back out.
       return null;
     }
-  }, [definition, run, stream.active, layout, agentNames, agentRuntimes, editable, issues, inspect, scopePath, scopeKey]);
+  }, [definition, runDefinition, run, stream.active, stream.liveProgress, layout, agentNames, agentRuntimes, editable, issues, inspect, scopePath, scopeKey, loopRounds, workflowNames]);
 
   const runningCount = useMemo(() => {
     if (!run || run.status !== 'RUNNING' || !run.scopes.$root) return 0;
-    return computeScopeReadyNodeIds(compilePlan(run.definition).rootScope, run.scopes.$root).length;
-  }, [run]);
+    const readyAtRoot = computeScopeReadyNodeIds(compilePlan(run.definition).rootScope, run.scopes.$root).length;
+    const activeOnCanvas = model ? model.nodes.filter((n) => n.data.status === 'running').length : 0;
+    return Math.max(readyAtRoot, activeOnCanvas);
+  }, [run, model]);
+
+  const inspectedExecution = useMemo(() => {
+    if (!run || runView !== 'canvas' || inspect?.type !== 'node') return null;
+    const trace = buildTraceModel({ run, runActive: stream.active, liveProgress: stream.liveProgress, agentNames, nowMs: Date.now() });
+    // Steps of a loop drawn as a cycle run in the round's scope the canvas shows.
+    const region = model?.loops
+      ?.filter((r) => r.memberIds.includes(inspect.nodeId))
+      .sort((a, b) => a.memberIds.length - b.memberIds.length)[0];
+    const spanScope =
+      region && region.shownRound !== undefined ? (region.rounds[region.shownRound]?.scopeKey ?? scopeKey) : scopeKey;
+    const find = (spans: readonly TraceSpan[]): TraceSpan | null => {
+      for (const span of spans) {
+        if (span.nodeId === inspect.nodeId && span.scopeKey === spanScope) return span;
+        const child = find(span.children);
+        if (child) return child;
+      }
+      return null;
+    };
+    return find(trace.spans);
+  }, [run, runView, inspect, scopeKey, stream.active, stream.liveProgress, agentNames, model]);
   const pill = describeRun(run, runningCount);
   const escalation = run?.chief.pendingEscalationId ? run.waitRequests[run.chief.pendingEscalationId] : undefined;
 
@@ -401,6 +459,16 @@ export function App() {
     },
     [record, navigate, fail]
   );
+
+  const stopRun = useCallback(async () => {
+    if (!run || !window.confirm('Stop this run? Steps still executing are cancelled and the run cannot be resumed.')) return;
+    try {
+      await api.cancelRun(run.runId);
+      if (record) setRuns(await api.listRuns(record.id));
+    } catch (err) {
+      fail(err);
+    }
+  }, [run, record, fail]);
 
   const layoutTimer = useRef<number>(0);
   /** Canvas positions are per graph (bare node ids); the saved layout keys them by path. */
@@ -453,10 +521,10 @@ export function App() {
           throw err;
         }
       },
-      async rerun(nodeId) {
+      async rerun(nodeId, targetScopeKey) {
         if (!run) return;
         try {
-          await api.rerun(run.runId, nodeId);
+          await api.rerun(run.runId, nodeId, targetScopeKey ?? scopeKey);
         } catch (err) {
           fail(err);
         }
@@ -469,7 +537,31 @@ export function App() {
       },
       inspectNode(nodeId) {
         setOpenPopover(null);
+        if (nodeId.includes('/')) {
+          const parts = nodeId.split('/');
+          const leafId = parts[parts.length - 1]!;
+          const containerParts = parts.slice(0, -1);
+          setScopePath((p) => [...p, ...containerParts]);
+          setInspect({ type: 'node', nodeId: leafId });
+          return;
+        }
         setInspect({ type: 'node', nodeId });
+      },
+      expandLoop(loopId) {
+        if (!definition) return;
+        const result = expandLoopIntoCycle(definition, loopId, scopePath);
+        if (result.ok) {
+          applyEdit(result.definition);
+          setInspect({ type: 'node', nodeId: result.deciderId });
+        } else {
+          fail(result.error);
+        }
+      },
+      openWorkflow(workflowId) {
+        navigate({ workflowId, runId: null });
+      },
+      chooseLoopRound(loopId, index) {
+        setLoopRounds((current) => ({ ...current, [loopId]: index }));
       },
       addPort(nodeId, side) {
         if (!definition) return;
@@ -484,13 +576,17 @@ export function App() {
         applyEdit(result.definition);
         setInspect({ type: 'node', nodeId });
       },
-      openScope(nodeId) {
+      openScope(nodeId, itemIndex) {
         setOpenPopover(null);
         setInspect(null);
-        setScopePath((p) => [...p, nodeId]);
+        const nextPath = [...scopePath, nodeId];
+        if (itemIndex !== undefined) {
+          setInstanceChoice((c) => ({ ...c, [nextPath.join('/')]: itemIndex }));
+        }
+        setScopePath(nextPath);
       },
     }),
-    [agents, runtimes, refreshRuntime, editable, openPopover, definition, run, applyEdit, fail, scopePath]
+    [agents, runtimes, refreshRuntime, editable, openPopover, definition, run, applyEdit, fail, scopePath, navigate]
   );
 
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
@@ -588,9 +684,9 @@ export function App() {
             // Each round's verdict from the step that decides the loop.
             let roundVerdicts: (string | undefined)[] = [];
             try {
-              const container = containerAt(run.definition, scopePath);
+              const container = containerAt(runDefinition!, scopePath);
               if (container?.kind === 'loop') {
-                const order = compilePlan(run.definition).rootScope;
+                const order = compilePlan(runDefinition!).rootScope;
                 let scope = order;
                 for (const step of scopePath) scope = scope.childScopes[step] ?? scope;
                 roundVerdicts = describeLoop(container, scope.topologicalOrder, { run, scopeKey: parentKey }).rounds.map((r) => r.verdict);
@@ -774,6 +870,11 @@ export function App() {
                       </Menu>
                     </div>
                   )}
+                  {run && (run.status === 'RUNNING' || run.status === 'WAITING') && (
+                    <button type="button" className="btn btn-stop" onClick={() => void stopRun()} title="Stop this run for good">
+                      Stop
+                    </button>
+                  )}
                   <div style={{ position: 'relative' }}>
                     <button type="button" className="btn" onClick={() => setMenu(menu === 'runs' ? null : 'runs')}>
                       Runs <span className="chev">⌄</span>
@@ -828,18 +929,32 @@ export function App() {
                 </>
               )
             )}
+            <button
+              type="button"
+              className="btn"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            >
+              {theme === 'dark' ? '☀ Light' : '☾ Dark'}
+            </button>
           </div>
         )}
       </header>
 
       {run && runView === 'trace' ? (
         <TraceView
+          key={run.runId}
           run={run}
           runActive={stream.active}
+          liveProgress={stream.liveProgress}
           agentNames={agentNames}
+          theme={theme}
+          onToggleTheme={toggleTheme}
           onOpenArtifact={actions.openArtifact}
           onRerun={actions.rerun}
           onAnswer={actions.answer}
+          conversationReader={conversationReader}
+          dataReader={nodeDataReader}
         />
       ) : (
         model &&
@@ -847,8 +962,9 @@ export function App() {
           <CanvasActionsContext.Provider value={actions}>
             <WorkflowCanvas
               model={model}
-              fitKey={`${newWorkflow ? `new:${newWorkflow.id}` : `${record?.id ?? ''}:${route.runId ?? ''}`}:${scopePath.join('/')}:${scopeKey}`}
+              fitKey={`${newWorkflow ? `new:${newWorkflow.id}` : `${record?.id ?? ''}:${route.runId ?? ''}`}:${scopePath.join('/')}:${scopeKey}:${model.nodes.length}`}
               editable={editable}
+              theme={theme}
               onLayoutChange={onLayoutChange}
               onBackgroundClick={() => {
                 setOpenPopover(null);
@@ -856,7 +972,11 @@ export function App() {
               }}
               onConnect={(connection) => {
                 const result = connect(definition, connection, scopePath);
-                if (result.ok) applyEdit(result.definition);
+                if (result.ok) {
+                  applyEdit(result.definition);
+                  notify(result.message, 'info');
+                  setInspect({ type: 'edge', edgeId: result.edgeIds[0]! });
+                }
                 else fail(result.error);
               }}
               onNodeClick={(nodeId) => actions.inspectNode(nodeId)}
@@ -904,8 +1024,25 @@ export function App() {
           onChange={applyEdit}
           onClose={() => setInspect(null)}
           onError={fail}
+          workflows={workflows ?? []}
+          onChooseSubflow={(nodeId, workflowId) => {
+            api
+              .getWorkflow(workflowId)
+              .then((child) => {
+                const current = definitionRef.current;
+                if (current) applyEdit(setSubflowWorkflow(current, nodeId, child.definition, scopePath));
+              })
+              .catch(fail);
+          }}
+          onOpenWorkflow={(workflowId) => actions.openWorkflow?.(workflowId)}
         />
       )}
+
+      {run && inspectedExecution && <div className="trace-shell trace-execution-overlay" data-theme={theme}>
+        <NodeExecutionDetails key={`${run.runId}:${scopeKey}:${inspectedExecution.nodeId}`} span={inspectedExecution}
+          runId={run.runId} runActive={stream.active} conversationReader={conversationReader} dataReader={nodeDataReader}
+          onClose={() => setInspect(null)} onOpenArtifact={actions.openArtifact} onRerun={actions.rerun} onAnswer={actions.answer} />
+      </div>}
 
       {definition && (
         <ChiefDock
@@ -914,6 +1051,7 @@ export function App() {
           editable={editable}
           agents={agents}
           chiefAnswering={stream.chiefAnswering}
+          liveProgress={stream.liveProgress}
           nodeName={nodeNameAnywhere}
           onPolicyChange={(chief) => applyEdit(updateWorkflowMeta(definition, { chief }))}
           onSend={async (text) => {
@@ -941,7 +1079,7 @@ export function App() {
         </aside>
       )}
 
-      {(toast ?? stream.error) && <div className="toast">{toast ?? stream.error}</div>}
+      {(toast ?? stream.error) && <div className="toast" role="status" data-tone={toast ? toastTone : 'error'}>{toast ?? stream.error}</div>}
     </div>
   );
 }

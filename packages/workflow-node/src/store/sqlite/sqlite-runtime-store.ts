@@ -6,7 +6,6 @@ import type {
 import {
   type AppendRunMutationsInput,
   applyRunLogEntry,
-  upgradeRunState,
   type Clock,
   CoordinatorFenceError,
   createRunMutations,
@@ -212,7 +211,7 @@ export class SqliteRuntimeStore implements RuntimeStore {
       cached && cached.revision <= head.seq && cached.revision > (snapshotRow?.seq ?? 0);
     let state = usableCache ? cached : null;
     if (!state && snapshotRow) {
-      state = upgradeRunState(snapshotRow.state as WorkflowRunState);
+      state = snapshotRow.state as WorkflowRunState;
     }
     for (const entry of this.readEntries(executor, runId, state?.revision ?? 0)) {
       state = applyRunLogEntry(state, entry);
@@ -564,6 +563,7 @@ export class SqliteRuntimeStore implements RuntimeStore {
             fromNodeId: edge.fromNodeId,
             toNodeId: edge.toNodeId,
             condition: edge.when ?? null,
+            loop: edge.loop ?? null,
           })
           .run();
       }

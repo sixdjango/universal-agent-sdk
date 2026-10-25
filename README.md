@@ -41,6 +41,9 @@ A standalone, zero-business-coupled **ACP (Agent Client Protocol)** Client SDK a
    - Detached POSIX process groups and Windows `taskkill /T` tree termination (`SIGTERM` $\rightarrow$ grace period $\rightarrow$ `SIGKILL`).
    - Windows DeepSeek Harness `cmd.exe` 8191-char limit bypass via direct `npx-cli.js` invocation and `windowsHide: true`.
    - Outermost Loopback `NO_PROXY` (`localhost,127.0.0.1,::1`) injection so user shell proxies never hijack local HTTP MCP connections.
+5. **Unified conversations**: FIFO chats, session leases, permission waits, lossless ACP message/tool records, host extensions and explicit chat crash recovery. Flow Agent calls use the same records and queries, with separate histories for retries, loop rounds and parallel items. Embed the SDK or use the Node SQLite assembly and standalone server API. See [Conversations](docs/conversations.md).
+6. **Chief-guided repairs**: Inspect run-scoped artifacts, guide the original producer, and rerun downstream validation through the existing graph. Hosts can configure command access, diagnostic reads, tool permissions and continuation through SDK options. Commands respect policy and human gates; the SDK run service owns queuing and leases. See [Chief capabilities and host options](docs/chief.md).
+7. **Per-node parallel execution**: Agent, Script and Sub-flow steps can process list items concurrently through a `parallel` property. The existing scheduler keeps per-item retries, permissions, conversations and scoped Chief repairs, aggregates every output in input order, and reports failures accurately. See [Node parallel execution](docs/node-parallel.md).
 
 ---
 

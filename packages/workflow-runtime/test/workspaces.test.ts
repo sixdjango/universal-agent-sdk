@@ -4,10 +4,12 @@ import {
   type AgentExecutionRequest,
   createWorkflowRuntime,
   DeterministicClock,
+  InMemoryWorkspaceManager,
+  type IsolatedWorkspace,
   type ScriptExecutionRequest,
   SequentialIdGenerator,
-  type RunSnapshotState,
-  applyRunLogEntry,
+  WorkspaceMergeConflictError,
+  foldRunLog,
 } from '../src/index';
 
 /** web(app) -> loop[fix(inherits backend)] and a script in app/packages/ui. */
@@ -129,28 +131,90 @@ describe('workspace slots', () => {
     expect(scripts[0]!.workspace?.path).toBe('/w/app');
   });
 
-  it('upgrades runs recorded before workspaces existed', async () => {
+  it('replays the recorded definition and workspace bindings without changing them', async () => {
     const { runtime } = recordingRuntime();
     const current = await runtime.start({ definition: twoRepoFlow(), workspaces: { app: '/a', backend: '/b' } });
-    // Strip what older versions did not record: run bindings, slot declarations, read lists.
-    const { workspaces: _w, ...legacy } = current;
-    const { workspaces: _s, ...legacyDefinition } = current.definition;
-    const web = legacyDefinition.graph.nodes[0]!;
-    const { readWorkspaces: _r, ...legacyWeb } = web as typeof web & { readWorkspaces?: string[] };
-    const state = {
-      ...legacy,
-      definition: { ...legacyDefinition, graph: { ...legacyDefinition.graph, nodes: [legacyWeb, ...legacyDefinition.graph.nodes.slice(1)] } },
-    } as unknown as RunSnapshotState;
-    const folded = applyRunLogEntry(null, {
-      runId: state.runId,
-      seq: 1,
-      coordinatorEpoch: 0,
-      recordedAtMs: 0,
-      mutation: { kind: 'run.created', state },
+    const folded = foldRunLog(await runtime.store.readLog(current.runId));
+    expect(folded).toEqual(current);
+    expect(folded?.workspaces).toEqual({
+      app: { slot: 'app', path: '/a' },
+      backend: { slot: 'backend', path: '/b' },
     });
-    expect(folded.workspaces).toEqual({});
-    expect(folded.definition.workspaces).toEqual([]);
-    const upgradedWeb = folded.definition.graph.nodes[0]!;
-    expect(upgradedWeb.kind === 'agent' && upgradedWeb.readWorkspaces).toEqual([]);
+    const web = folded!.definition.graph.nodes.find((node) => node.id === 'web')!;
+    expect(web.kind === 'agent' && web.readWorkspaces).toEqual(['backend', 'docs']);
+  });
+
+  describe('when an isolated step\'s changes do not merge', () => {
+    /** Copies whose merges fail with `clashes`, in order, then succeed. */
+    function clashingRuntime(clashes: WorkspaceMergeConflictError[]) {
+      const agents: AgentExecutionRequest[] = [];
+      const isolated: unknown[] = [];
+      const workspaces = new InMemoryWorkspaceManager();
+      Object.assign(workspaces, {
+        async isolate(input: unknown): Promise<IsolatedWorkspace> {
+          isolated.push(input);
+          const empty = { diff: '', files: [] };
+          return {
+            path: '/copy',
+            changes: async () => empty,
+            integrate: async () => {
+              const clash = clashes.shift();
+              if (clash) throw clash;
+              return empty;
+            },
+            discard: async () => undefined,
+          };
+        },
+      });
+      const runtime = createWorkflowRuntime({
+        clock: new DeterministicClock(),
+        idGenerator: new SequentialIdGenerator(),
+        workspaces,
+        executor: {
+          async executeAgent(req) {
+            agents.push(req);
+            return { status: 'COMPLETED' };
+          },
+          async executeScript() {
+            return { exitCode: 0, stdout: '', stderr: '', durationMs: 1 };
+          },
+        },
+      });
+      const definition = createWorkflowBuilder('clash')
+        .addWorkspace({ name: 'app', mergeCheck: { command: 'pnpm', args: ['typecheck'] } })
+        .addAgent({ id: 'web', name: 'Web', role: 'author', goal: 'Build UI', writeScopes: ['src'], isolation: 'worktree' })
+        .buildDefinition();
+      const settle = async () =>
+        runtime.runUntilSettled((await runtime.start({ definition, workspaces: { app: '/w/app' } })).runId);
+      return { agents, isolated, settle };
+    }
+
+    it('does the step again in a fresh copy, telling the agent what broke and where its changes are', async () => {
+      const check = { command: 'pnpm typecheck', output: "src/a.ts: Cannot find name 'foo'" };
+      const { agents, isolated, settle } = clashingRuntime([new WorkspaceMergeConflictError([], 'ua/run/web', check)]);
+      const done = await settle();
+      expect(done.status).toBe('SUCCEEDED');
+      expect(isolated).toHaveLength(2);
+      expect(isolated[0]).toMatchObject({ mergeCheck: { command: 'pnpm', args: ['typecheck'] } });
+      expect(agents).toHaveLength(2);
+      expect(agents[0]!.renderedPrompt).not.toContain('Your Earlier Changes');
+      const again = agents[1]!.renderedPrompt;
+      expect(again).toContain('## Your Earlier Changes Broke Together With Others');
+      expect(again).toContain('`pnpm typecheck` failed');
+      expect(again).toContain("Cannot find name 'foo'");
+      expect(again).toContain('`git show ua/run/web`');
+    });
+
+    it('fails the step when it clashes again', async () => {
+      const { agents, settle } = clashingRuntime([
+        new WorkspaceMergeConflictError(['src/a.ts'], 'ua/run/web'),
+        new WorkspaceMergeConflictError(['src/b.ts'], 'ua/run/web'),
+      ]);
+      const done = await settle();
+      expect(done.status).toBe('FAILED');
+      expect(agents).toHaveLength(2);
+      expect(agents[1]!.renderedPrompt).toContain('other steps changed src/a.ts');
+      expect(done.scopes.$root!.nodes.web!.error).toContain('src/b.ts changed meanwhile');
+    });
   });
 });

@@ -1,5 +1,5 @@
 import type { WaitRequest } from '@universal-agent/workflow-contract';
-import { Handle, type NodeProps, Position } from '@xyflow/react';
+import { Handle, type NodeProps, Position, useUpdateNodeInternals } from '@xyflow/react';
 import { type ReactNode, useEffect, useState } from 'react';
 import {
   AgentIcon,
@@ -12,6 +12,7 @@ import {
   RerunIcon,
   ReviewIcon,
   ScriptIcon,
+  SubflowIcon,
 } from '../components/icons';
 import { RuntimeFields } from '../components/RuntimeFields';
 import type { CardData, CardRow, ViewStatus } from '../model/canvas';
@@ -31,6 +32,25 @@ const STATUS_TEXT: Record<ViewStatus, string> = {
   unreached: 'Not reached',
 };
 
+type CardVariant = CardData['kind'] | 'review';
+
+function getCardVariant(data: CardData): CardVariant {
+  if (data.kind === 'agent' && data.subtitle === 'Independent review') return 'review';
+  return data.kind;
+}
+
+const VARIANT_BADGE: Record<CardVariant, string> = {
+  inputs: 'Input',
+  outputs: 'Output',
+  agent: 'Agent',
+  review: 'Review',
+  script: 'Script',
+  gate: 'Gate',
+  loop: 'Loop',
+  parallel: 'Parallel',
+  subflow: 'Sub-flow',
+};
+
 function CardIcon({ data }: { data: CardData }) {
   switch (data.kind) {
     case 'agent':
@@ -43,6 +63,8 @@ function CardIcon({ data }: { data: CardData }) {
       return <LoopIcon />;
     case 'parallel':
       return <ParallelIcon />;
+    case 'subflow':
+      return <SubflowIcon />;
     case 'inputs':
       return <InputsIcon />;
     case 'outputs':
@@ -200,7 +222,7 @@ function AnswerPanel({ wait, onClose }: { wait: WaitRequest; onClose: () => void
   );
 }
 
-function Row({ row, onClick, connectable }: { row: CardRow; onClick?: () => void; connectable: boolean }) {
+function Row({ row, onClick, connectable, reversed }: { row: CardRow; onClick?: () => void; connectable: boolean; reversed: boolean }) {
   return (
     <div
       className="row"
@@ -224,12 +246,16 @@ function Row({ row, onClick, connectable }: { row: CardRow; onClick?: () => void
         <Handle
           type={row.handle.type}
           id={row.handle.id}
-          position={row.handle.type === 'target' ? Position.Left : Position.Right}
+          position={(row.handle.type === 'target') !== reversed ? Position.Left : Position.Right}
           className="port"
+          role="button"
+          aria-label={`${row.handle.type === 'target' ? 'Input' : 'Output'} parameter: ${row.label}`}
+          title={`${row.handle.type === 'target' ? 'Input parameter — receives a value' : 'Output parameter — passes a value'}. Connect only to a parameter point.`}
           isConnectable={connectable}
         />
       )}
       <span className="row-label">
+        {row.handle && row.kind !== 'add' && <span className="port-direction" aria-hidden="true">{row.handle.type === 'target' ? 'IN' : 'OUT'}</span>}
         {row.status && <span className="row-status" data-status={row.status} style={{ display: 'inline-block' }} />} {row.label}
       </span>
       {row.value !== undefined && (
@@ -305,9 +331,15 @@ function LoopRule({ loop }: { loop: LoopSummary }) {
 }
 
 /** A workflow node: icon, title, status, interactive rows with port handles, and activity. */
-export function NodeCard({ data: raw }: NodeProps) {
+export function NodeCard({ id, data: raw }: NodeProps) {
   const data = raw as CardData;
   const actions = useCanvasActions();
+  // On a row running right to left, edges come in on the right and leave on the left.
+  const reversed = !!data.reversed;
+  const inSide = reversed ? Position.Right : Position.Left;
+  const outSide = reversed ? Position.Left : Position.Right;
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => updateNodeInternals(id), [id, reversed, updateNodeInternals]);
   const popoverId = actions.openPopover?.startsWith(`${data.nodeId}:`) ? actions.openPopover : null;
   const close = () => actions.setOpenPopover(null);
   const toggle = (kind: string) =>
@@ -319,46 +351,109 @@ export function NodeCard({ data: raw }: NodeProps) {
   }
 
   const rowAction = (row: CardRow): (() => void) | undefined => {
+    // Design view: a sub-flow step opens the workflow it runs.
+    if (row.id === 'workflow') return data.subflowOf && actions.openWorkflow ? () => actions.openWorkflow!(data.subflowOf!) : undefined;
     if (row.kind === 'add') {
       if (data.kind === 'inputs') return () => actions.addPort(data.nodeId, 'out');
       if (data.kind === 'outputs') return () => actions.addPort(data.nodeId, 'in');
       return () => actions.addPort(data.nodeId, row.handle?.type === 'target' ? 'in' : 'out');
     }
-    if (row.kind === 'open') return () => actions.openScope(data.nodeId);
+    if (row.kind === 'open') return () => actions.openScope(data.scopeNodeId ?? data.nodeId, data.itemIndex);
     if (row.kind === 'agent' && data.kind === 'agent' && data.editable) return () => toggle('agent');
     if (row.kind === 'decision' && data.pendingWait) return () => toggle('answer');
     if (row.artifactId) return () => actions.openArtifact(row.artifactId!, `${data.title} · ${row.label}`);
     return undefined;
   };
 
+  const variant = getCardVariant(data);
+  const badgeText =
+    data.kind === 'parallel' && data.itemIndex !== undefined
+      ? `Parallel #${data.itemIndex + 1}`
+      : VARIANT_BADGE[variant];
+  const showSubtitleText =
+    Boolean(data.subtitle) &&
+    data.subtitle.toLowerCase() !== badgeText.toLowerCase() &&
+    !(variant === 'review' && data.subtitle === 'Independent review');
+
   return (
-    <div className="card-wrap" data-status={data.status} style={{ ['--order' as string]: data.order }}>
+    <div
+      className="card-wrap"
+      data-status={data.status}
+      data-kind={data.kind}
+      data-variant={variant}
+      style={{ ['--order' as string]: data.order }}
+    >
       <div
         className="card"
         data-status={data.status}
+        data-kind={data.kind}
+        data-variant={variant}
+        data-fanned-item={data.itemIndex !== undefined ? 'true' : 'false'}
         data-editable={data.editable ? 'true' : 'false'}
         data-invalid={data.issue ? 'true' : 'false'}
+        data-selected={data.selected ? 'true' : 'false'}
         title={data.issue}
       >
-        <Handle type="target" id="ctrl-in" position={Position.Left} className="ctrl" isConnectable={data.editable} />
-        <Handle type="source" id="ctrl-out" position={Position.Right} className="ctrl" isConnectable={data.editable} />
-        {data.loopRole === 'decider' && (
-          // Right of centre: activity chips under the card sit on the left.
-          <Handle type="source" id="loop-out" position={Position.Bottom} className="loop-handle" style={{ left: '88%' }} isConnectable={false} />
+        {data.kind !== 'inputs' && data.kind !== 'outputs' && <>
+          <Handle type="target" id="ctrl-in" position={inSide} className="ctrl" role="button"
+            aria-label="Execution input" title="Execution input — wait for upstream steps. No parameters are passed here." isConnectable={data.editable} />
+          <Handle type="source" id="ctrl-out" position={outSide} className="ctrl" role="button"
+            aria-label="Execution output" title="Execution output — continue after success or a matching branch. Connect only to execution input." isConnectable={data.editable} />
+        </>}
+        {/* Flow lines reach the inputs and outputs cards too; they are not connected by hand. */}
+        {data.kind === 'inputs' && <Handle type="source" id="ctrl-out" position={outSide} className="ctrl" isConnectable={false} />}
+        {data.kind === 'outputs' && <Handle type="target" id="ctrl-in" position={inSide} className="ctrl" isConnectable={false} />}
+        {(data.loopRole === 'decider' || data.loopRole === 'self') && (
+          <Handle type="source" id="loop-out" position={Position.Bottom} className="loop-handle" isConnectable={false} />
         )}
-        {data.loopRole === 'start' && (
+        {(data.loopRole === 'start' || data.loopRole === 'self') && (
           <Handle type="target" id="loop-in" position={Position.Bottom} className="loop-handle" isConnectable={false} />
         )}
         <div className="card-head">
-          <div className="card-icon">
+          <div className="card-icon" data-variant={variant}>
             <CardIcon data={data} />
           </div>
           <div className="card-headtext">
             <div className="card-title" title={data.title}>
               {data.title}
             </div>
-            <div className="card-sub">{data.subtitle}</div>
+            <div className="card-sub">
+              <span className="card-kind-badge" data-variant={variant}>
+                {badgeText}
+              </span>
+              {showSubtitleText && <span className="card-sub-text">{data.subtitle}</span>}
+              {/* Loop roles: a small mark, the explanation on hover. */}
+              {data.loopRole === 'decider' && (
+                <span className="loop-mark" title={`Decides the loop: ${data.loopRepeat ?? ''} → another round`}>
+                  ↻ decides
+                </span>
+              )}
+              {data.loopRole === 'start' && (
+                <span className="loop-mark" title="Every round of the loop starts here">
+                  ↻ start
+                </span>
+              )}
+              {data.loopRole === 'self' && (
+                <span className="loop-mark" title={`Runs again while ${data.loopRepeat ?? ''}`}>
+                  ↻ repeats
+                </span>
+              )}
+            </div>
           </div>
+          {data.kind === 'loop' && data.editable && actions.expandLoop && (
+            <button
+              type="button"
+              className="icon-btn nodrag loop-expand"
+              title="Expand onto the canvas: its steps and a way back from the deciding step"
+              aria-label="Expand loop onto the canvas"
+              onClick={(event) => {
+                event.stopPropagation();
+                actions.expandLoop!(data.nodeId);
+              }}
+            >
+              ↻⤢
+            </button>
+          )}
           {data.rerunnable && (
             <button
               type="button"
@@ -382,17 +477,11 @@ export function NodeCard({ data: raw }: NodeProps) {
             </span>
           )}
         </div>
-        {data.loopRole === 'decider' && (
-          <div className="loop-decider" title="This step's result decides whether the loop runs another round">
-            <span aria-hidden="true">↻</span> Decides the loop: {data.loopRepeat} → another round
-          </div>
-        )}
-        {data.loopRole === 'start' && <div className="loop-decider loop-start">Every round starts here</div>}
         {data.loop && <LoopRule loop={data.loop} />}
         {rows.length > 0 && (
           <div className="rows">
             {rows.map((row) => (
-              <Row key={row.id} row={row} onClick={rowAction(row)} connectable={data.editable} />
+              <Row key={row.id} row={row} onClick={rowAction(row)} connectable={data.editable} reversed={reversed} />
             ))}
           </div>
         )}

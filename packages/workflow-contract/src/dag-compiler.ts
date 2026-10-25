@@ -1,9 +1,14 @@
 import { parseAgentRef } from './agent';
+import { lowerCycles, type LoweringIssue } from './cycles';
+import { embedSubflows } from './subflows';
+import { lowerNodeParallel, type ParallelLoweringIssue } from './parallel';
 import { computeDefinitionDigest } from './canonical';
 import {
   type ControlEdge,
   type DataEdge,
+  type EdgeCondition,
   defaultWorkspaceSlot,
+  edgeConditionSources,
   listWorkspaceSlots,
   type PortDefinition,
   type WorkflowDefinition,
@@ -25,7 +30,11 @@ export type WorkflowValidationErrorCode =
   | 'MISSING_REQUIRED_INPUT_BINDING'
   | 'DATA_EDGE_ORDER_VIOLATION'
   | 'INVALID_AGENT_REF'
-  | 'UNKNOWN_WORKSPACE_SLOT';
+  | 'UNKNOWN_WORKSPACE_SLOT'
+  | 'INVALID_LOOP_BACK'
+  | 'LOOPS_OVERLAP'
+  | 'INVALID_CONDITION'
+  | 'INVALID_PARALLEL';
 
 export interface WorkflowValidationIssue {
   code: WorkflowValidationErrorCode;
@@ -116,6 +125,15 @@ interface WorkspaceSlotContext {
 }
 
 /** Whether a node (or anything inside a container) can change files. */
+/** `otherwise` means "no sibling edge holds"; inside `all` / `any` it means nothing. */
+function containsNestedOtherwise(condition: EdgeCondition): boolean {
+  if (condition.kind !== 'all' && condition.kind !== 'any') return false;
+  return condition.conditions.some((c) => c.kind === 'otherwise' || containsNestedOtherwise(c));
+}
+
+/** Every parallel item also gets its position in the list, from 0. */
+export const PARALLEL_ITEM_INDEX_PORT: PortDefinition = { name: 'itemIndex', type: 'number', required: false };
+
 function nodeWrites(node: WorkflowNode): boolean {
   if (node.kind === 'agent' || node.kind === 'script') return node.writeScopes.length > 0;
   if (node.kind === 'loop') return node.bodyGraph.nodes.some(nodeWrites);
@@ -274,6 +292,24 @@ function compileGraphScope(
       continue;
     }
 
+    for (const checked of edgeConditionSources(edge.when)) {
+      if (checked === '$input' || nodesById[checked]) continue;
+      issues.push({
+        code: 'INVALID_CONDITION',
+        message: `Control edge "${edge.id}" checks "${checked}", which is not a step in this graph`,
+        scopePath,
+        edgeId: edge.id,
+      });
+    }
+    if (edge.when && containsNestedOtherwise(edge.when)) {
+      issues.push({
+        code: 'INVALID_CONDITION',
+        message: `Control edge "${edge.id}" puts "otherwise" inside "all"/"any"; it only works as an edge's whole condition`,
+        scopePath,
+        edgeId: edge.id,
+      });
+    }
+
     outgoingControlEdges[edge.fromNodeId]!.push(edge);
     incomingControlEdges[edge.toNodeId]!.push(edge);
 
@@ -311,7 +347,7 @@ function compileGraphScope(
     const cycleNodes = Object.keys(nodesById).filter((id) => !topologicalOrder.includes(id));
     issues.push({
       code: 'CYCLE_DETECTED',
-      message: `Cycle detected in scope "${scopePath}" involving nodes: ${cycleNodes.join(', ')}. Use a LoopNode container instead of back-edges.`,
+      message: `Cycle detected in scope "${scopePath}" involving nodes: ${cycleNodes.join(', ')}. Close a loop with a way back (a conditional edge to an earlier step) that has a round limit.`,
       scopePath,
       nodeId: cycleNodes[0],
     });
@@ -555,16 +591,18 @@ function compileGraphScope(
         childSlots[node.id]!
       );
     } else if (node.kind === 'parallel') {
+      // Inside, the items port holds one item (the list outside), next to the item's index.
       const itemInputs: PortDefinition[] = [
-        { name: 'item', type: 'json', required: false },
-        { name: 'itemIndex', type: 'number', required: false },
-        ...node.inputs,
+        ...(node.origin
+          ? node.itemGraph.nodes[0]!.inputs
+          : node.inputs.map((port) => (port.name === node.itemsPort ? { ...port, type: 'json' as const } : port))),
+        PARALLEL_ITEM_INDEX_PORT,
       ];
       childScopes[node.id] = compileGraphScope(
         node.itemGraph,
         `${scopePath}/${node.id}`,
         itemInputs,
-        node.outputs,
+        node.origin ? node.itemGraph.nodes[0]!.outputs : node.outputs,
         issues,
         childSlots[node.id]!
       );
@@ -585,6 +623,14 @@ function compileGraphScope(
     writeScopeConflicts,
     childScopes,
   };
+}
+
+/** Scope path as drawn: loops the compiler made from cycles live in their parent graph. */
+function authoredScopePath(scopePath: string): string {
+  return scopePath
+    .split('/')
+    .filter((segment) => !segment.endsWith('__loop'))
+    .join('/');
 }
 
 /**
@@ -609,6 +655,26 @@ export function validateWorkflowDefinition(
 
   const definition = parsed.data;
   const issues: WorkflowValidationIssue[] = [];
+  // Loops drawn as cycles run as LoopNodes; issues still point at the graph as drawn.
+  const lowering: LoweringIssue[] = [];
+  // Sub-flows with an embedded workflow run it once, as a loop of one round.
+  const slotNames = new Set(listWorkspaceSlots(definition).map((s) => s.name));
+  const parallelIssues: ParallelLoweringIssue[] = [];
+  const executableGraph = lowerCycles(embedSubflows(lowerNodeParallel(definition.graph, '$root', parallelIssues), slotNames), '$root', lowering);
+  issues.push(...parallelIssues.map((issue) => ({ ...issue, code: 'INVALID_PARALLEL' as const })));
+  const seen = new Set<string>();
+  for (const issue of lowering) {
+    const key = `${issue.code}|${issue.edgeId ?? ''}|${issue.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    issues.push({
+      code: issue.code,
+      message: issue.message,
+      scopePath: authoredScopePath(issue.scopePath),
+      ...(issue.nodeId ? { nodeId: issue.nodeId } : {}),
+      ...(issue.edgeId ? { edgeId: issue.edgeId } : {}),
+    });
+  }
   if (definition.chief?.agentRef !== undefined && !parseAgentRef(definition.chief.agentRef)) {
     issues.push({
       code: 'INVALID_AGENT_REF',
@@ -635,14 +701,19 @@ export function validateWorkflowDefinition(
       scopePath: '$root',
     });
   }
+  const firstCompileIssue = issues.length;
   const rootScope = compileGraphScope(
-    definition.graph,
+    executableGraph,
     '$root',
     definition.inputs,
     definition.outputs,
     issues,
     { declared: declaredSlots, inherited: defaultSlot, isolation: 'auto', enforceWriteScopes: false, concurrent: false }
   );
+
+  for (let i = firstCompileIssue; i < issues.length; i++) {
+    issues[i] = { ...issues[i]!, scopePath: authoredScopePath(issues[i]!.scopePath) };
+  }
 
   if (issues.length > 0) {
     return { ok: false, issues };

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { RunWorkspaceBinding, WorkflowDefinition } from '@universal-agent/workflow-contract';
+import type { ChiefCommand, LiveAttemptProgress, RunWorkspaceBinding, WorkflowDefinition } from '@universal-agent/workflow-contract';
 import {
   CHIEF_WAIT_NODE_ID,
   ChiefUnavailableError,
@@ -47,6 +47,8 @@ export interface RunServiceOptions {
   readonly ownerId?: string;
   /** How long a lease lasts without renewal (default 30 s); renewed every third of that. */
   readonly leaseTtlMs?: number;
+  /** Continue a reopened flow after a chief chat reply (default true). False leaves driving to the host. */
+  readonly autoContinueAfterChief?: boolean;
 }
 
 /** A run whose driver failed is not retried by the orphan sweep for this long. */
@@ -67,11 +69,10 @@ export class RunService {
   private readonly clock: Clock;
   readonly ownerId: string;
   private readonly leaseTtlMs: number;
+  private readonly autoContinueAfterChief: boolean;
   private readonly failedAt = new Map<string, number>();
   private heartbeat: NodeJS.Timeout | null = null;
   private sweeper: NodeJS.Timeout | null = null;
-  /** Chief answers being produced, so `close` can wait for them. */
-  private readonly chiefAnswers = new Set<Promise<void>>();
   /** Messages per run the chief is still answering. */
   private readonly chiefAnswering = new Map<string, number>();
 
@@ -82,6 +83,7 @@ export class RunService {
     this.clock = options.clock ?? new SystemClock();
     this.ownerId = options.ownerId ?? `host_${randomUUID()}`;
     this.leaseTtlMs = options.leaseTtlMs ?? 30_000;
+    this.autoContinueAfterChief = options.autoContinueAfterChief ?? true;
     migrateHostTables(this.db);
   }
 
@@ -122,6 +124,10 @@ export class RunService {
 
   isActive(runId: string): boolean {
     return this.loops.has(runId);
+  }
+
+  getLiveProgress(runId: string): readonly LiveAttemptProgress[] {
+    return this.runtime.getLiveProgress(runId);
   }
 
   list(options: { workflowId?: string; limit?: number } = {}): RunSummary[] {
@@ -177,13 +183,36 @@ export class RunService {
   async messageChief(input: { runId: string; text: string; authorId: string }): Promise<{ messageId: string }> {
     await this.get(input.runId);
     if (this.abort.signal.aborted) throw conflict('The run service is shutting down');
-    const { messageId } = await this.runtime.postChiefMessage(input).catch((err: unknown) => {
+    // Reserve the driver/lease before recording, so a second host cannot run a chief against
+    // this host's active nodes. While this host is executing the run the chief answers at
+    // once; retries and reruns it asks for wait in the driver queue until execution settles.
+    const executing = this.loops.get(input.runId);
+    let answering: Promise<ChiefCommand[]> = Promise.resolve([]);
+    let deliver!: (messageId: string | undefined) => void;
+    const recorded = new Promise<string | undefined>(resolve => { deliver = resolve; });
+    this.enqueue(input.runId, async signal => {
+      const messageId = await recorded;
+      if (messageId && !signal.aborted) {
+        const held = executing ? await answering : await this.answerChief(input.runId, messageId, signal);
+        if (held.length > 0 && !signal.aborted) {
+          await this.runtime.applyHeldChiefCommands({ runId: input.runId, messageId, commands: held, signal });
+        }
+      }
+      const state = await this.get(input.runId);
+      if (messageId && this.autoContinueAfterChief && state.status === 'RUNNING' && !signal.aborted) {
+        await this.runtime.runUntilSettled(input.runId, { signal });
+      }
+    });
+    try {
+      const { messageId } = await this.runtime.postChiefMessage(input);
+      if (executing) answering = this.answerChief(input.runId, messageId, executing.abort.signal, true);
+      deliver(messageId);
+      return { messageId };
+    } catch (err) {
+      deliver(undefined);
       if (err instanceof ChiefUnavailableError) throw invalid(err.message);
       throw invalid(err instanceof Error ? err.message : String(err));
-    });
-    const answering = this.answerChief(input.runId, messageId).finally(() => this.chiefAnswers.delete(answering));
-    this.chiefAnswers.add(answering);
-    return { messageId };
+    }
   }
 
   /** Whether the chief is still working on an answer for `runId` in this process. */
@@ -191,25 +220,34 @@ export class RunService {
     return (this.chiefAnswering.get(runId) ?? 0) > 0;
   }
 
-  private async answerChief(runId: string, messageId: string): Promise<void> {
+  /** Has the chief answer; returns the retries and reruns held until execution settles. */
+  private async answerChief(runId: string, messageId: string, signal: AbortSignal, holdWhileBusy = false): Promise<ChiefCommand[]> {
     this.chiefAnswering.set(runId, (this.chiefAnswering.get(runId) ?? 0) + 1);
     try {
-      const state = await this.runtime.answerChiefMessage({ runId, messageId, signal: this.abort.signal });
-      // Commands such as a rerun can set the run going again.
-      if (state.status === 'RUNNING' && !this.loops.has(runId)) {
-        try {
-          this.driveUnlessHeldElsewhere(runId);
-        } catch {
-          // Another process picked it up first.
-        }
-      }
+      return (await this.runtime.replyToChiefMessage({ runId, messageId, signal, holdWhileBusy })).held;
     } catch (err) {
-      if (!this.abort.signal.aborted) this.logger.error({ err, runId }, 'chief could not answer a message');
+      if (!signal.aborted) this.logger.error({ err, runId }, 'chief could not answer a message');
+      return [];
     } finally {
       const left = (this.chiefAnswering.get(runId) ?? 1) - 1;
       if (left > 0) this.chiefAnswering.set(runId, left);
       else this.chiefAnswering.delete(runId);
     }
+  }
+
+  /**
+   * Stops a run for good. Steps this process is executing are aborted (their agent sessions
+   * and scripts are cancelled) and queued work is dropped; whatever a step still returns is not
+   * recorded. A run another process drives is cancelled too: its driver stops at its next commit.
+   */
+  async cancel(runId: string): Promise<WorkflowRunState> {
+    await this.get(runId);
+    const loop = this.loops.get(runId);
+    if (loop) {
+      loop.queue.length = 0;
+      loop.abort.abort();
+    }
+    return await this.runtime.cancelRun({ runId });
   }
 
   async rerunFromNode(input: { runId: string; nodeId: string; scopeKey?: string }): Promise<WorkflowRunState> {
@@ -249,7 +287,6 @@ export class RunService {
     if (this.sweeper) clearInterval(this.sweeper);
     this.sweeper = null;
     await Promise.allSettled([...this.loops.values()].map((l) => l.done));
-    await Promise.allSettled([...this.chiefAnswers]);
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
   }

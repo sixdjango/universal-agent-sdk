@@ -39,6 +39,8 @@
     "*.css"
   ],
   "dependencies": {
+    "@tanstack/react-virtual": "3.14.14",
+    "@universal-agent/client": "workspace:*",
     "@universal-agent/workflow-contract": "workspace:*",
     "@universal-agent/workflow-runtime": "workspace:*"
   },

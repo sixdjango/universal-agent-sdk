@@ -1,0 +1,354 @@
+/* Interactive Thinking & Step Timeline (inspired by thinking.mp4) */
+
+.thinking-trace {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-2);
+  user-select: none;
+}
+
+.thinking-trace[data-variant='card'] {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  box-shadow: var(--shadow-card);
+}
+
+.thinking-trace[data-variant='card'][data-state='running'] {
+  border-color: var(--border-strong);
+}
+
+.thinking-trace[data-variant='card'][data-state='failed'] {
+  border-color: var(--danger-border);
+}
+
+.thinking-trace[data-variant='chat'] {
+  margin-bottom: 6px;
+}
+
+.thinking-trace[data-variant='drawer'] {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--row);
+}
+
+/* ---------------------------------------------------------------- header */
+.thinking-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.thinking-head:hover {
+  color: var(--text);
+}
+
+.thinking-chev {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  font-size: 12px;
+  color: var(--text-3);
+  transition: transform 0.2s var(--ease);
+}
+
+.thinking-trace[data-open='false'] .thinking-chev {
+  transform: rotate(-90deg);
+}
+
+.thinking-head-label {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.thinking-head-label[data-shimmer='true'],
+.thinking-step-label[data-shimmer='true'] {
+  background: linear-gradient(
+    90deg,
+    var(--text-2) 0%,
+    var(--text) 45%,
+    var(--shimmer-peak) 50%,
+    var(--text) 55%,
+    var(--text-2) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 2s linear infinite;
+}
+
+.thinking-timer {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.thinking-collapsed-summary {
+  margin-left: auto;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- timeline body */
+.thinking-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  padding-left: 2px;
+  animation: fade-in 0.22s var(--ease) both;
+}
+
+/* In the trace drawer a long run's steps scroll inside a bounded box. */
+.thinking-trace[data-variant='drawer'] .thinking-body {
+  max-height: min(360px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.thinking-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+/* Vertical spine connecting steps (rows render on their own, so the last one is marked). */
+.thinking-step:not([data-last='true'])::before {
+  content: '';
+  position: absolute;
+  top: 16px;
+  bottom: -10px;
+  left: 7.5px;
+  width: 1px;
+  background: var(--border-strong);
+}
+
+.thinking-marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 18px;
+  color: var(--text-3);
+}
+
+.thinking-marker.is-running {
+  color: var(--text);
+}
+
+.thinking-spinner-arc {
+  transform-origin: 7px 7px;
+  animation: thinking-spin 0.95s linear infinite;
+}
+
+.thinking-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.thinking-marker.is-failed {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.thinking-marker.is-final-done {
+  width: 15px;
+  height: 15px;
+  margin-top: 1.5px;
+  border-radius: 50%;
+  background: #3b82f6;
+  color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.thinking-marker.is-final-failed {
+  width: 15px;
+  height: 15px;
+  margin-top: 1.5px;
+  border-radius: 50%;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------- step content */
+.thinking-step-main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.thinking-step-label {
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.thinking-step[data-status='running'] .thinking-step-label {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.thinking-step[data-status='failed'] .thinking-step-label {
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------- file & port pills */
+.thinking-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.thinking-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 148px;
+  height: 21px;
+  padding: 0 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.thinking-pill.is-more {
+  color: var(--text-3);
+  background: transparent;
+}
+
+.thinking-pill-badge {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #38bdf8;
+}
+
+.thinking-pill-badge[data-badge='JS'] {
+  color: #fbbf24;
+}
+
+.thinking-pill-badge[data-badge='JSON'] {
+  color: #a78bfa;
+}
+
+.thinking-pill-badge[data-badge='ART'],
+.thinking-pill-badge[data-badge='OUT'] {
+  color: #34d399;
+}
+
+.thinking-pill-badge[data-badge='IN'],
+.thinking-pill-badge[data-badge='MD'] {
+  color: #94a3b8;
+}
+
+.thinking-pill-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- sub-items */
+.thinking-subitems {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.thinking-subitem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.thinking-subitem[data-status='failed'] {
+  color: var(--warn);
+}
+
+.thinking-subitem-branch {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.thinking-subitem-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- final step */
+.thinking-step-main.is-final-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.thinking-final-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.thinking-step.is-final[data-status='failed'] .thinking-final-title {
+  color: var(--danger);
+}
+
+.thinking-final-summary {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+@keyframes thinking-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes thinking-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}

@@ -66,6 +66,8 @@ body {
   gap: 8px;
 }
 
+.toast[data-tone='info'] { border-color: var(--execution-edge); }
+
 .toast {
   position: absolute;
   left: 50%;
@@ -232,5 +234,5 @@ body {
 .view-switch-btn[data-active='true'] {
   background: var(--row-hover);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
 }

@@ -175,4 +175,39 @@ describe('@universal-agent/workflow-agents', () => {
     expect(second.registry.listVersions('planner')).toHaveLength(1);
     expect((await second.registry.resolve('planner'))?.charter).toBe('Breaks work down.');
   });
+
+  it('preserves host chief controls through the Agents and Node factories with the default supervisor', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ua-embedded-chief-'));
+    tempDirs.push(home);
+    const requests: AgentExecutionRequest[] = [];
+    const { runtime, db } = createAgentWorkflowRuntime({ workdir: home, homeDir: home,
+      agents: [{ id: 'embedded', name: 'Embedded', charter: 'Follow host rules', runtime: { adapter: 'host-test' } }],
+      adapters: { 'host-test': { async executeAgent(request) {
+        requests.push(request);
+        return request.node.id === '$chief'
+          ? { status: 'COMPLETED', outputs: { decision: { rationale: 'Check host controls', commands: [
+            { kind: 'report', summary: 'Reviewed' }, { kind: 'rerun_from_node', scopeKey: '$root', nodeId: 'worker' },
+          ] } } }
+          : { status: 'COMPLETED', artifacts: { report: { content: 'host report' } } };
+      } } },
+      chiefOptions: { allowedCommands: ['report'], context: { pageReadBytes: 32, stageReadQuotaBytes: 40 } },
+    });
+    dbs.push(db);
+    const definition = createWorkflowBuilder('embedded-chief-controls').setChief({ agentRef: 'embedded', triggers: [] })
+      .addAgent({ id: 'worker', name: 'Worker', role: 'worker', agentRef: 'embedded', goal: 'Write', outputs: [{ name: 'report', type: 'artifact', required: true }] })
+      .buildDefinition();
+    const done = await runtime.runUntilSettled((await runtime.start({ definition })).runId);
+    const { messageId } = await runtime.postChiefMessage({ runId: done.runId, authorId: 'host', text: 'Inspect' });
+    const answered = await runtime.answerChiefMessage({ runId: done.runId, messageId });
+    const chief = requests.find(request => request.node.id === '$chief')!;
+    expect(chief.manifest).toMatchObject({ pageReadBytes: 32, stageReadQuotaBytes: 40 });
+    expect(chief.manifest.authorizedArtifactIds).toHaveLength(1);
+    const commandsSection = chief.renderedPrompt.split('## Allowed Commands')[1].split('## Rules')[0];
+    expect(commandsSection).toContain('"kind":"report"');
+    expect(commandsSection).not.toContain('"kind":"rerun_from_node"');
+    expect(answered.events.find(event => event.type === 'chief.intervened')).toMatchObject({
+      applied: [{ kind: 'report' }], rejected: [{ command: { kind: 'rerun_from_node' }, reason: expect.stringContaining('disabled by the host') }],
+    });
+    expect(answered.status).toBe('SUCCEEDED');
+  });
 });

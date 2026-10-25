@@ -1,0 +1,81 @@
+/* A step's saved data in its details panel ("Data" tab). */
+
+.node-data {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.node-data-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.node-data-record {
+  border: 1px solid var(--trace-border);
+  border-radius: 8px;
+  background: var(--trace-surface);
+}
+
+.node-data-record summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.node-data-record summary::-webkit-details-marker {
+  display: none;
+}
+
+.node-data-key {
+  font-family: var(--mono);
+  color: var(--trace-text);
+}
+
+.node-data-preview {
+  overflow: hidden;
+  font-family: var(--mono);
+  color: var(--trace-text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-data-record[open] .node-data-preview {
+  visibility: hidden;
+}
+
+.node-data-record .trace-detail-code {
+  margin: 0 10px 6px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.node-data-meta {
+  padding: 0 10px 8px;
+  font-size: 11px;
+  color: var(--trace-text-3);
+}
+
+.node-data-divider {
+  padding-top: 6px;
+  border-top: 1px solid var(--trace-border);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--trace-text-2);
+}
+
+.node-data-empty {
+  margin: 0;
+  color: var(--trace-text-2);
+  line-height: 1.5;
+}
+
+.node-data-empty code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}

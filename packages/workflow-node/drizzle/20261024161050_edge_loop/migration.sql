@@ -1,0 +1,1 @@
+ALTER TABLE `definition_edges` ADD `loop_json` text;

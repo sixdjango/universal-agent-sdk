@@ -56,6 +56,7 @@ export function resolveWaitRequestInState(
   if (!waitReq) {
     throw new Error(`WaitRequest "${input.requestId}" not found in run "${current.runId}"`);
   }
+  if (waitReq.status === 'CANCELLED') throw new Error(`WaitRequest "${input.requestId}" was cancelled`);
 
   // Idempotent convergence if already resolved with the same answer (canonical key-order independent)
   if (waitReq.status === 'RESOLVED') {

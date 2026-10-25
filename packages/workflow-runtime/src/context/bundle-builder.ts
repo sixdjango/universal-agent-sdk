@@ -49,7 +49,6 @@ export class ArtifactQuotaExceededError extends Error {
 
 const DEFAULT_INITIAL_BUNDLE_BYTES = 32 * 1024;
 const DEFAULT_PAGE_READ_BYTES = 8 * 1024;
-const DEFAULT_STAGE_READ_QUOTA_BYTES = 128 * 1024;
 
 function utf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).byteLength;
@@ -105,8 +104,7 @@ export async function buildDataEdgeContextBundle(
   const budgetConfig = node.contextBudget;
   const initialBudgetBytes = budgetConfig?.initialBundleBytes ?? DEFAULT_INITIAL_BUNDLE_BYTES;
   const pageReadBytes = budgetConfig?.pageReadBytes ?? DEFAULT_PAGE_READ_BYTES;
-  const stageReadQuotaBytes =
-    budgetConfig?.stageReadQuotaBytes ?? DEFAULT_STAGE_READ_QUOTA_BYTES;
+  const stageReadQuotaBytes = budgetConfig?.stageReadQuotaBytes;
 
   // Fixed header cost (identity, goal, criteria, constraints and chief guidance are 100% preserved)
   const fixedHeaderText = [
@@ -236,7 +234,7 @@ export async function buildDataEdgeContextBundle(
     totalInlineBytes: usedInlineBytes,
     initialBudgetBytes,
     pageReadBytes,
-    stageReadQuotaBytes,
+    ...(stageReadQuotaBytes !== undefined ? { stageReadQuotaBytes } : {}),
     createdAtMs: clock.nowMs(),
   };
 
@@ -352,6 +350,17 @@ function renderContextPrompt(
     lines.push(`## Instructions\n${node.promptTemplate}`);
   }
 
+  lines.push(
+    [
+      '## Step Data',
+      'You can keep intermediate data (progress, partial results, notes, metrics) for this step and read what other steps saved:',
+      '- `ua-workflow` tools: `data_put` (collection, key, value), `data_append` (collection, value), `data_get` (collection, key, optional nodeId), `data_list` (optional collection, nodeId); pass `shared: true` for data every step of the run can see.',
+      '- Or, from a shell: `ua-workflow data put <collection> <key> <json>`, `ua-workflow data get <collection> <key>`, `ua-workflow data list` (see `ua-workflow help`).',
+      '- If you knowingly leave a problem for later, log it so it is handed over: `log_issue` (message, severity, file) or `ua-workflow issue "<message>" --severity minor --file <path>`. `list_findings` / `ua-workflow findings` lists everything still open in the run.',
+      'Saved data is not your result: still finish with the output block below.',
+    ].join('\n')
+  );
+
   lines.push(renderOutputContract(node));
 
   return lines.join('\n\n');
@@ -415,8 +424,10 @@ export function createScopedArtifactReader(options: {
         readOptions?.maxBytes ?? options.manifest.pageReadBytes,
         options.manifest.pageReadBytes
       );
-      const remaining = options.manifest.stageReadQuotaBytes - cumulativeBytesRead;
-      if (remaining <= 0) {
+      const remaining = options.manifest.stageReadQuotaBytes === undefined
+        ? null
+        : options.manifest.stageReadQuotaBytes - cumulativeBytesRead;
+      if (remaining !== null && remaining <= 0) {
         throw new ArtifactQuotaExceededError(
           options.manifest.attemptId,
           requestedMaxBytes,
@@ -424,14 +435,16 @@ export function createScopedArtifactReader(options: {
         );
       }
 
-      const effectiveMaxBytes = Math.min(requestedMaxBytes, remaining);
+      const effectiveMaxBytes = remaining === null
+        ? requestedMaxBytes
+        : Math.min(requestedMaxBytes, remaining);
       const slice = await options.artifactStore.readSlice(artifactId, {
         offsetBytes: readOptions?.offsetBytes ?? 0,
         maxBytes: effectiveMaxBytes,
         section: readOptions?.section,
       });
 
-      if (slice.readBytes > remaining) {
+      if (remaining !== null && slice.readBytes > remaining) {
         throw new ArtifactQuotaExceededError(
           options.manifest.attemptId,
           slice.readBytes,
@@ -453,8 +466,10 @@ export function createScopedArtifactReader(options: {
       return slice;
     },
 
-    getRemainingQuotaBytes(): number {
-      return Math.max(0, options.manifest.stageReadQuotaBytes - cumulativeBytesRead);
+    getRemainingQuotaBytes(): number | null {
+      return options.manifest.stageReadQuotaBytes === undefined
+        ? null
+        : Math.max(0, options.manifest.stageReadQuotaBytes - cumulativeBytesRead);
     },
 
     getReceipts(): readonly ArtifactReadReceipt[] {

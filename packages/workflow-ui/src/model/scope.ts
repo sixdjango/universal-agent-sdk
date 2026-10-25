@@ -5,6 +5,7 @@ import type {
   WorkflowDefinition,
   WorkflowGraph,
 } from '@universal-agent/workflow-contract';
+import { PARALLEL_ITEM_INDEX_PORT } from '@universal-agent/workflow-contract';
 
 /**
  * A position in the workflow's nesting: container node ids from the root graph down,
@@ -18,10 +19,21 @@ export const OUTPUTS_NODE_ID = '$output';
 export type ContainerNode = LoopNode | ParallelNode;
 
 /** Fields every parallel item receives without declaring them (see the contract compiler). */
-export const PARALLEL_ITEM_PORTS: readonly PortDefinition[] = [
-  { name: 'item', type: 'json', required: false },
-  { name: 'itemIndex', type: 'number', required: false },
-];
+export const PARALLEL_ITEM_PORTS: readonly PortDefinition[] = [PARALLEL_ITEM_INDEX_PORT];
+
+/**
+ * What a container's steps receive through `$input`: its own inputs, except that inside a
+ * parallel step the items port holds one item, next to the item's index.
+ */
+export function containerScopeInputs(container: ContainerNode): PortDefinition[] {
+  if (container.kind !== 'parallel') return container.inputs;
+  return [
+    ...container.inputs.map((port) =>
+      port.name === container.itemsPort ? { ...port, type: 'json' as const, description: port.description ?? 'This item' } : port
+    ),
+    ...PARALLEL_ITEM_PORTS,
+  ];
+}
 
 export function innerGraph(container: ContainerNode): WorkflowGraph {
   return container.kind === 'loop' ? container.bodyGraph : container.itemGraph;

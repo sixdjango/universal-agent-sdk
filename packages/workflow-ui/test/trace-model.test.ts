@@ -114,11 +114,14 @@ describe('buildTraceModel', () => {
     expect(buildSpan.subtitle).toContain('Builder');
     expect(buildSpan.isSlowest).toBe(true);
     expect(buildSpan.children.length).toBeGreaterThan(0);
+    expect(buildSpan.hasConversation).toBe(true);
+    expect(buildSpan.children.every(child => !child.hasConversation)).toBe(true);
 
     const reviewSpan = trace.spans[1]!;
     expect(reviewSpan.title).toBe('Review the change');
     expect(reviewSpan.verdict).toBe('PASS');
     expect(reviewSpan.isSlowest).toBeUndefined();
+    expect(reviewSpan.hasConversation).toBe(true);
   });
 
   it('formats durations, costs, and token counts cleanly', () => {

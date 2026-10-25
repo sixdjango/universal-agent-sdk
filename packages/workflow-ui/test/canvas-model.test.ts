@@ -137,4 +137,131 @@ describe('buildCanvasModel', () => {
     expect(byId(model.nodes, 'build').data.status).toBe('running');
     expect(byId(model.edges, 'data_$input.request_to_build.request').data.tone).toBe('flowing');
   });
+
+  it('fans out a parallel node into concurrent item cards with fanned-out edges during a run', async () => {
+    const definition = createWorkflowBuilder('parallel-flow', 'Parallel flow')
+      .addWorkflowInput({ name: 'topics', type: 'json', required: true })
+      .addWorkflowOutput({ name: 'digest', type: 'artifact', required: true })
+      .addParallel({
+        id: 'explain_each',
+        name: 'Explain each topic',
+        itemsPort: 'topics',
+        maxConcurrency: 3,
+        failurePolicy: 'fail_fast',
+        inputs: [{ name: 'topics', type: 'json', required: true }],
+        outputs: [{ name: 'results', type: 'json', required: true }],
+        itemBody: (b) =>
+          b
+            .addAgent({
+              id: 'explain',
+              name: 'Explain one topic',
+              role: 'author',
+              goal: 'Explain the topic',
+              inputs: [{ name: 'topic', type: 'json', required: true }],
+              outputs: [{ name: 'explanation', type: 'string', required: true }],
+            })
+            .connectData({ fromNodeId: '$input', fromPort: 'topics', toNodeId: 'explain', toPort: 'topic' })
+            .connectData({ fromNodeId: 'explain', fromPort: 'explanation', toNodeId: '$output', toPort: 'results' }),
+      })
+      .addAgent({
+        id: 'combine',
+        name: 'Write digest',
+        role: 'author',
+        goal: 'Combine explanations',
+        inputs: [{ name: 'explanations', type: 'json', required: true }],
+        outputs: [{ name: 'digest', type: 'artifact', required: true }],
+      })
+      .connectData({ fromNodeId: '$input', fromPort: 'topics', toNodeId: 'explain_each', toPort: 'topics' })
+      .connectData({
+        fromNodeId: 'explain_each',
+        fromPort: 'results',
+        toNodeId: 'combine',
+        toPort: 'explanations',
+        withControl: true,
+      })
+      .connectData({ fromNodeId: 'combine', fromPort: 'digest', toNodeId: '$output', toPort: 'digest' })
+      .buildDefinition();
+
+    const runtime = createWorkflowRuntime({
+      clock: new DeterministicClock(),
+      idGenerator: new SequentialIdGenerator(),
+      executor: {
+        async executeAgent(req) {
+          if (req.node.id === 'explain') {
+            return {
+              status: 'COMPLETED',
+              outputs: { explanation: `Explained ${String(req.inputs.topic)}` },
+            };
+          }
+          return {
+            status: 'COMPLETED',
+            artifacts: { digest: { content: 'Combined digest' } },
+          };
+        },
+        async executeScript() {
+          throw new Error('unused');
+        },
+      },
+    });
+
+    // Even when started with a comma-separated string, coerceParallelItems splits into 3 concurrent items
+    const started = await runtime.start({
+      definition,
+      inputs: { topics: 'SQLite WAL, CRDTs, Raft' },
+    });
+
+    // Right after start (before runUntilSettled finishes), previewItems already fans out 3 concurrent running cards
+    const runningModel = buildCanvasModel({ definition, run: started, runActive: true });
+    expect(runningModel.nodes.map((n) => n.id)).toEqual([
+      INPUTS_NODE_ID,
+      'explain_each[0]',
+      'explain_each[1]',
+      'explain_each[2]',
+      'combine',
+      OUTPUTS_NODE_ID,
+    ]);
+    expect(byId(runningModel.nodes, 'explain_each[0]').data).toMatchObject({
+      title: 'Explain each topic #1',
+      subtitle: 'SQLite WAL',
+      status: 'running',
+      scopeNodeId: 'explain_each',
+      itemIndex: 0,
+    });
+    expect(byId(runningModel.nodes, 'explain_each[1]').data).toMatchObject({
+      title: 'Explain each topic #2',
+      subtitle: 'CRDTs',
+      status: 'running',
+      scopeNodeId: 'explain_each',
+      itemIndex: 1,
+    });
+    expect(byId(runningModel.nodes, 'explain_each[2]').data).toMatchObject({
+      title: 'Explain each topic #3',
+      subtitle: 'Raft',
+      status: 'running',
+      scopeNodeId: 'explain_each',
+      itemIndex: 2,
+    });
+    // Edges fan out from $input to all 3 item cards and fan in from all 3 item cards to combine
+    expect(runningModel.edges.filter((e) => e.source === INPUTS_NODE_ID && !e.data.control)).toHaveLength(3);
+    expect(runningModel.edges.filter((e) => e.target === 'combine' && !e.data.control)).toHaveLength(3);
+    // Flow lines show the order; parameter lines wait until a card is selected.
+    expect(runningModel.edges.filter((e) => e.source === INPUTS_NODE_ID && e.data.control)).toHaveLength(3);
+    expect(runningModel.edges.filter((e) => e.target === 'combine' && e.data.control)).toHaveLength(3);
+    expect(runningModel.edges.filter((e) => !e.data.control).every((e) => e.hidden)).toBe(true);
+
+    const settled = await runtime.runUntilSettled(started.runId);
+    expect(settled.status).toBe('SUCCEEDED');
+    const settledModel = buildCanvasModel({ definition, run: settled, runActive: false });
+    expect(settledModel.nodes.map((n) => n.id)).toEqual([
+      INPUTS_NODE_ID,
+      'explain_each[0]',
+      'explain_each[1]',
+      'explain_each[2]',
+      'combine',
+      OUTPUTS_NODE_ID,
+    ]);
+    expect(byId(settledModel.nodes, 'explain_each[0]').data.status).toBe('succeeded');
+    expect(byId(settledModel.nodes, 'explain_each[1]').data.status).toBe('succeeded');
+    expect(byId(settledModel.nodes, 'explain_each[2]').data.status).toBe('succeeded');
+  });
 });

@@ -7,3 +7,6 @@ export * from './events';
 export * from './builder';
 export * from './patterns';
 export * from './workspace';
+export * from './cycles';
+export * from './subflows';
+export * from './parallel';

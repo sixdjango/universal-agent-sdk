@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ScriptNode } from '@universal-agent/workflow-contract';
@@ -66,17 +66,24 @@ describe('NodeScriptExecutor inputs, outputs and changes', () => {
     await expect(bad(JSON.stringify({ assessment: { verdict: 'LGTM', summary: 'x' } }))).rejects.toThrow('assessment.verdict');
   });
 
-  it('records what a writing script changed in a git workspace, without touching the index', async () => {
+  it.each([false, true])('records writing script changes without touching the index (racy timestamps: %s)', async racy => {
     const repo = tempDir();
     execFileSync('git', ['init', '-q', '-b', 'main', repo]);
     writeFileSync(join(repo, 'a.txt'), 'old\n');
     writeFileSync(join(repo, 'gone.txt'), 'bye\n');
+    const timestamp = 1_700_000_000;
+    if (racy) {
+      execFileSync('git', ['-C', repo, 'config', 'core.trustctime', 'false']);
+      utimesSync(join(repo, 'a.txt'), timestamp, timestamp);
+    }
     execFileSync('git', ['-C', repo, 'add', '.']);
     execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init']);
+    if (racy) utimesSync(join(repo, '.git', 'index'), timestamp, timestamp);
     writeFileSync(join(repo, 'dirty-before.txt'), 'already here\n');
 
     const executor = new NodeScriptExecutor({ defaultWorkdir: repo });
-    const code = `const fs = require('node:fs'); fs.writeFileSync('a.txt', 'new\\n'); fs.writeFileSync('b.txt', 'added\\n'); fs.rmSync('gone.txt');`;
+    const code = `const fs = require('node:fs'); fs.writeFileSync('a.txt', 'new\\n'); fs.writeFileSync('b.txt', 'added\\n'); fs.rmSync('gone.txt');
+      ${racy ? `fs.utimesSync('a.txt', ${timestamp}, ${timestamp});` : ''}`;
     const result = await executor.executeScript({ ...base, node: script(code, { writeScopes: ['.'] }), inputs: {} });
 
     expect(result.changes?.files).toEqual([

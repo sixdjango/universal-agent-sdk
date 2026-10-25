@@ -11,6 +11,7 @@ rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
 
 const entryPoints = {
+  'conversation-view': resolve(pkgRoot, 'src/conversation-view.ts'),
   index: resolve(pkgRoot, 'src/index.ts'),
   'claude-acp': resolve(pkgRoot, 'src/entries/claude-acp-entry.ts'),
   'codex-acp': resolve(pkgRoot, 'src/entries/codex-acp-entry.ts'),
@@ -45,7 +46,7 @@ await Promise.all(
   Object.entries(entryPoints).map(([entryKey, inputPath]) =>
     build({
       input: inputPath,
-      platform: 'node',
+      platform: entryKey === 'conversation-view' ? 'browser' : 'node',
       external,
       output: {
         file: resolve(distDir, `${entryKey}.js`),

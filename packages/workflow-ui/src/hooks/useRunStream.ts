@@ -1,3 +1,4 @@
+import type { LiveAttemptProgress } from '@universal-agent/workflow-contract';
 import { applyRunLogEntry, type RunLogEntry, type WorkflowRunState } from '@universal-agent/workflow-runtime';
 import { useEffect, useState } from 'react';
 
@@ -7,6 +8,8 @@ export interface RunStream {
   readonly active: boolean;
   /** Whether the chief is working on an answer to a message. */
   readonly chiefAnswering: boolean;
+  /** Live in-flight thinking/tool steps for currently executing nodes or the chief. */
+  readonly liveProgress: readonly LiveAttemptProgress[];
   readonly error: string | null;
 }
 
@@ -24,19 +27,27 @@ const defaultStreamUrl = (runId: string) => `./api/runs/${encodeURIComponent(run
 
 export function useRunStream(runId: string | null, options: RunStreamOptions = {}): RunStream {
   const streamUrl = options.url ?? defaultStreamUrl;
-  const [stream, setStream] = useState<RunStream>({ run: null, active: false, chiefAnswering: false, error: null });
+  const [stream, setStream] = useState<RunStream>({
+    run: null,
+    active: false,
+    chiefAnswering: false,
+    liveProgress: [],
+    error: null,
+  });
 
   useEffect(() => {
-    setStream({ run: null, active: false, chiefAnswering: false, error: null });
+    setStream({ run: null, active: false, chiefAnswering: false, liveProgress: [], error: null });
     if (!runId) return;
 
     let state: WorkflowRunState | null = null;
     let active = false;
     let chiefAnswering = false;
+    let liveProgress: readonly LiveAttemptProgress[] = [];
+    let liveKey = '[]';
     let frame = 0;
     const publish = () => {
       frame = 0;
-      setStream({ run: state, active, chiefAnswering, error: null });
+      setStream({ run: state, active, chiefAnswering, liveProgress, error: null });
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(publish);
@@ -49,23 +60,47 @@ export function useRunStream(runId: string | null, options: RunStreamOptions = {
       try {
         state = applyRunLogEntry(state, entry);
       } catch (err) {
-        setStream({ run: state, active, chiefAnswering, error: err instanceof Error ? err.message : String(err) });
+        setStream({
+          run: state,
+          active,
+          chiefAnswering,
+          liveProgress,
+          error: err instanceof Error ? err.message : String(err),
+        });
         source.close();
         return;
       }
       schedule();
     });
     source.addEventListener('activity', (event) => {
-      const next = JSON.parse((event as MessageEvent<string>).data) as { active: boolean; chiefAnswering?: boolean };
-      if (next.active !== active || (next.chiefAnswering ?? false) !== chiefAnswering) {
+      const next = JSON.parse((event as MessageEvent<string>).data) as {
+        active: boolean;
+        chiefAnswering?: boolean;
+        liveProgress?: readonly LiveAttemptProgress[];
+      };
+      const nextProgress = next.liveProgress ?? [];
+      const nextKey = JSON.stringify(nextProgress);
+      if (
+        next.active !== active ||
+        (next.chiefAnswering ?? false) !== chiefAnswering ||
+        nextKey !== liveKey
+      ) {
         active = next.active;
         chiefAnswering = next.chiefAnswering ?? false;
+        liveProgress = nextProgress;
+        liveKey = nextKey;
         schedule();
       }
     });
     source.onerror = () => {
       if (source.readyState === EventSource.CLOSED) {
-        setStream({ run: state, active: false, chiefAnswering: false, error: 'Lost connection to the server' });
+        setStream({
+          run: state,
+          active: false,
+          chiefAnswering: false,
+          liveProgress: [],
+          error: 'Lost connection to the server',
+        });
       }
     };
 

@@ -16,7 +16,7 @@ import { ArtifactToolHost, createNodeWorkflowRuntime } from '../src/index';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const sdkClientDir = join(packageRoot, 'node_modules/@modelcontextprotocol/sdk/dist/esm/client');
-const BIG = 40 * 1024;
+const BIG = 200 * 1024;
 
 /**
  * A mock ACP agent. `writer` returns a large artifact; `reader` finds the artifact id in its
@@ -53,12 +53,34 @@ async function readViaMcp(artifactId) {
   const client = new Client({ name: 'mock-agent', version: '1.0.0' });
   await client.connect(transport);
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-  const page = await client.callTool({ name: 'read_artifact', arguments: { artifactId } });
+  const listing = await client.callTool({ name: 'list_context_inputs', arguments: {} });
+  const initialQuota = JSON.parse(listing.content[0].text).remainingReadQuotaBytes;
+  let offsetBytes = 0;
+  let content = '';
+  let firstMeta;
+  let lastMeta;
+  do {
+    const page = await client.callTool({ name: 'read_artifact', arguments: { artifactId, offsetBytes, maxBytes: ${BIG} } });
+    if (page.isError) {
+      await client.close();
+      throw new Error(page.content[0].text);
+    }
+    const text = page.content[0].text;
+    const separator = text.lastIndexOf('\\n---\\n');
+    const meta = JSON.parse(text.slice(separator + 5));
+    content += text.slice(0, separator).replace(/\\n$/, '');
+    firstMeta ??= meta;
+    lastMeta = meta;
+    offsetBytes = meta.nextOffsetBytes;
+  } while (lastMeta.hasMore);
   const denied = await client.callTool({ name: 'read_artifact', arguments: { artifactId: 'art_not_mine' } });
   await client.close();
-  const text = page.content[0].text;
-  const meta = JSON.parse(text.slice(text.lastIndexOf('\\n---\\n') + 5));
-  return { transport: server.type === 'http' ? 'http' : 'stdio', tools, firstLine: text.split('\\n')[0], meta, deniedIsError: denied.isError === true };
+  return {
+    transport: server.type === 'http' ? 'http' : 'stdio', tools,
+    firstLine: content.split('\\n')[0], meta: firstMeta, lastMeta, initialQuota,
+    readAll: content === '# Big report\\n' + 'x'.repeat(${BIG}),
+    deniedIsError: denied.isError === true,
+  };
 }
 
 readline.createInterface({ input: process.stdin }).on('line', async (line) => {
@@ -133,18 +155,22 @@ describe('artifact tools for agents', () => {
     const seen = readNode.outputs.seen!.value as Record<string, unknown>;
     expect(seen).toMatchObject({
       transport,
-      tools: ['list_context_inputs', 'read_artifact'],
+      tools: expect.arrayContaining(['list_context_inputs', 'read_artifact']),
       firstLine: '# Big report',
       deniedIsError: true,
-      meta: { offsetBytes: 0, hasMore: true },
+      meta: { offsetBytes: 0, hasMore: true, readBytes: 8 * 1024, remainingReadQuotaBytes: null },
+      lastMeta: { hasMore: false, remainingReadQuotaBytes: null },
+      initialQuota: null,
+      readAll: true,
     });
     expect((seen.meta as { totalBytes: number }).totalBytes).toBeGreaterThan(BIG);
 
     // The read went through the attempt's scoped reader, so it is on the record.
     const attemptId = readNode.latestAttemptId!;
     const receipts = done.readReceipts.filter((r) => r.attemptId === attemptId);
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0]!.readBytes).toBe(8 * 1024);
+    expect(receipts.length).toBeGreaterThan(16);
+    expect(receipts.every((receipt) => receipt.readBytes > 0 && receipt.readBytes <= 8 * 1024)).toBe(true);
+    expect(receipts.reduce((total, receipt) => total + receipt.readBytes, 0)).toBe(BIG + '# Big report\n'.length);
     expect(done.manifests[done.attempts[attemptId]!.contextManifestId!]!.entries[0]!.mode).toBe('artifact_ref');
   }, 30_000);
 

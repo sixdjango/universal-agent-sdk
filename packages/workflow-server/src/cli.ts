@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { COMMANDS, COMMANDS_HELP, runCommand } from './commands';
 import { createDefaultWorkflowServer, LOOPBACK_HOSTS } from './index';
 
-const HELP = `Usage: universal-agent-workflow [options]
+const HELP = `Usage: universal-agent-workflow [serve] [options]
+       universal-agent-workflow <command> [args] [options]
 
-Starts the Universal Agent workflow server and web canvas.
+Starts the Universal Agent workflow server and web canvas, or talks to a running one.
 
-Options:
+Serve options:
   --port <n>         Port to listen on (default 4317)
   --host <addr>      Interface to bind (default 127.0.0.1)
   --workdir <dir>    Default workspace; workflows without workspace slots run here
@@ -14,12 +16,30 @@ Options:
   --home <dir>       Data directory (default: $UNIVERSAL_AGENT_HOME or ~/.universal-agent)
   --allow-host <h>   Extra Host header name to accept (repeatable), e.g. when using --host 0.0.0.0
   -h, --help         Show this help
-`;
+
+${COMMANDS_HELP}`;
 
 // `pnpm run <script> -- --flag` forwards the `--` itself; drop it.
-const argv = process.argv.slice(2);
+const raw = process.argv.slice(2);
+const argv = raw[0] === '--' ? raw.slice(1) : raw;
+const command = argv[0];
+
+if (command && (COMMANDS as readonly string[]).includes(command)) {
+  if (argv.includes('-h') || argv.includes('--help')) {
+    process.stdout.write(HELP);
+    process.exit(0);
+  }
+  const code = await runCommand(command, argv.slice(1), {
+    out: (text) => process.stdout.write(text),
+    err: (text) => process.stderr.write(text),
+    env: process.env,
+    cwd: process.env.INIT_CWD ?? process.cwd(),
+  });
+  process.exit(code);
+}
+
 const { values } = parseArgs({
-  args: argv[0] === '--' ? argv.slice(1) : argv,
+  args: command === 'serve' ? argv.slice(1) : argv,
   options: {
     port: { type: 'string', default: '4317' },
     host: { type: 'string', default: '127.0.0.1' },

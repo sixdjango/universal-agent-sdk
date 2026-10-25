@@ -8,4 +8,7 @@
 @import './inspector.css';
 @import './workspaces.css';
 @import './trace.css';
+@import './conversation.css';
 @import './chief-dock.css';
+@import './thinking.css';
+@import './node-data.css';

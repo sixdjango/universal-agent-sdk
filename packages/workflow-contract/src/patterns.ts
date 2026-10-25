@@ -366,7 +366,7 @@ export function createParallelFanOutFlow(options: {
           })
           .connectData({
             fromNodeId: '$input',
-            fromPort: 'item',
+            fromPort: 'items',
             toNodeId: 'item_worker',
             toPort: 'item',
           })

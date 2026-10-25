@@ -55,10 +55,12 @@ describe('editing loop bodies and parallel items', () => {
 
   it('exposes built-in parallel item fields read-only and follows the list input rename', () => {
     let d = ok(addNode(createBlankWorkflow('Fan out', []), 'parallel')).definition;
-    // Inside, each item sees the built-in fields plus the step's own inputs.
-    expect(portsOf(d, '$input', 'out', ['parallel']).map((p) => p.name)).toEqual(['item', 'itemIndex', 'items']);
-    expect(updatePort(d, '$input', 'out', 'item', { name: 'x' }, ['parallel']).ok).toBe(false);
-    expect(removePort(d, '$input', 'out', 'item', ['parallel'])).toBe(d);
+    // Inside, each item sees its index plus the step's own inputs, the list port holding one item.
+    expect(portsOf(d, '$input', 'out', ['parallel']).map((p) => p.name)).toEqual(['itemIndex', 'items']);
+    expect(updatePort(d, '$input', 'out', 'itemIndex', { name: 'x' }, ['parallel']).ok).toBe(false);
+    expect(removePort(d, '$input', 'out', 'itemIndex', ['parallel'])).toBe(d);
+    const inner = buildCanvasModel({ definition: d, path: ['parallel'], editable: true });
+    expect(inner.nodes[0]!.data.rows.find((r) => r.label === 'items')).toMatchObject({ value: 'json' });
 
     d = ok(updatePort(d, 'parallel', 'in', 'items', { name: 'files' })).definition;
     const node = d.graph.nodes.find((n) => n.id === 'parallel');

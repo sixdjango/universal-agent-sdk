@@ -1,26 +1,54 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { ContextManifest } from '@universal-agent/workflow-contract';
-import type { ScopedArtifactReader } from '@universal-agent/workflow-runtime';
-import { ARTIFACT_MCP_SERVER_NAME, ARTIFACT_TOOLS, type ArtifactToolResult, runArtifactTool } from './tools';
+import { z } from 'zod';
+import {
+  ARTIFACT_MCP_SERVER_NAME,
+  ARTIFACT_TOOLS,
+  type ArtifactToolName,
+  type ArtifactToolResult,
+  runArtifactTool,
+  type WorkflowToolContext,
+} from './tools';
 
 /** What ACP's `session/new` accepts in `mcpServers` (HTTP or stdio form). */
 export type ArtifactMcpServer =
   | { type: 'http'; name: string; url: string; headers: { name: string; value: string }[] }
   | { name: string; command: string; args: string[]; env: { name: string; value: string }[] };
 
-interface Registration {
-  readonly manifest: ContextManifest;
-  readonly reader: ScopedArtifactReader;
-}
+type Registration = WorkflowToolContext;
 
 /** Env var that tells the stdio bridge where to forward tool calls. */
 export const ARTIFACT_RPC_URL_ENV = 'UA_WORKFLOW_ARTIFACT_RPC';
+/** Env var that tells the `ua-workflow` CLI where this step's tools are. */
+export const WORKFLOW_RPC_URL_ENV = 'UA_WORKFLOW_RPC';
+
+/** The built CLI, found like the bridge. */
+function resolveCliScript(): string | null {
+  for (const candidate of ['./workflow-cli.js', '../../dist/workflow-cli.js']) {
+    const path = fileURLToPath(new URL(candidate, import.meta.url));
+    if (existsSync(path)) return path;
+  }
+  return null;
+}
+
+/** A directory with `ua-workflow` launchers (POSIX shell and Windows) for the built CLI. */
+let shimDir: string | null | undefined;
+function cliShimDir(): string | null {
+  if (shimDir !== undefined) return shimDir;
+  const cli = resolveCliScript();
+  if (!cli) return (shimDir = null);
+  const dir = mkdtempSync(join(tmpdir(), 'ua-workflow-cli-'));
+  writeFileSync(join(dir, 'ua-workflow'), `#!/bin/sh\nexec "${process.execPath}" "${cli}" "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(dir, 'ua-workflow.cmd'), `@"${process.execPath}" "${cli}" %*\r\n`);
+  return (shimDir = dir);
+}
 
 /**
  * The built stdio bridge: next to the bundle (`dist/index.js`), or the package's `dist/` when
@@ -60,7 +88,7 @@ export class ArtifactToolHost {
   private server: Server | null = null;
   private baseUrl: Promise<string> | null = null;
 
-  /** Exposes `manifest`'s artifacts until the returned `release` is called. */
+  /** Exposes a step's tools (its artifacts and/or its data) until `release` is called. */
   register(registration: Registration): { token: string; release(): void } {
     const token = randomBytes(24).toString('base64url');
     this.registrations.set(token, registration);
@@ -83,6 +111,26 @@ export class ArtifactToolHost {
         env: [{ name: ARTIFACT_RPC_URL_ENV, value: `${base}/rpc/${token}` }],
       },
     ];
+  }
+
+  /** Where the CLI (and anything else speaking `{ name, arguments }`) calls this step's tools. */
+  async rpcUrl(token: string): Promise<string> {
+    return `${await this.start()}/rpc/${token}`;
+  }
+
+  /**
+   * Environment for a process (a script, or an agent's shell) to use this step's tools: the
+   * RPC URL and `ua-workflow` on its PATH. Merge it over the process's own environment.
+   */
+  async cliEnv(token: string, basePath = process.env.PATH ?? ''): Promise<Record<string, string>> {
+    const url = await this.rpcUrl(token);
+    const dir = cliShimDir();
+    const cli = resolveCliScript();
+    return {
+      [WORKFLOW_RPC_URL_ENV]: url,
+      ...(cli ? { UA_WORKFLOW_CLI: cli } : {}),
+      ...(dir ? { PATH: basePath ? `${dir}${delimiter}${basePath}` : dir } : {}),
+    };
   }
 
   async close(): Promise<void> {
@@ -135,18 +183,13 @@ export class ArtifactToolHost {
   }
 }
 
-/** An MCP server exposing the artifact tools, executing them through `call`. */
+/** An MCP server exposing the step tools (artifacts and data), executing them through `call`. */
 export function createArtifactMcpServer(call: (name: string, args: unknown) => Promise<ArtifactToolResult>): McpServer {
   const server = new McpServer({ name: ARTIFACT_MCP_SERVER_NAME, version: '1.0.0' });
-  server.registerTool(
-    'list_context_inputs',
-    { description: ARTIFACT_TOOLS.list_context_inputs.description, inputSchema: ARTIFACT_TOOLS.list_context_inputs.inputSchema },
-    () => call('list_context_inputs', {})
-  );
-  server.registerTool(
-    'read_artifact',
-    { description: ARTIFACT_TOOLS.read_artifact.description, inputSchema: ARTIFACT_TOOLS.read_artifact.inputSchema },
-    (args) => call('read_artifact', args)
-  );
+  for (const name of Object.keys(ARTIFACT_TOOLS) as ArtifactToolName[]) {
+    const tool = ARTIFACT_TOOLS[name];
+    const shape = tool.inputSchema as z.ZodRawShape;
+    server.registerTool(name, { description: tool.description, inputSchema: shape }, (args: unknown) => call(name, args ?? {}));
+  }
   return server;
 }

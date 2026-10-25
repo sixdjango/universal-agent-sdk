@@ -5,18 +5,22 @@ import {
   type AssessmentVerdict,
   AssessmentVerdictSchema,
   canonicalizeJsonValue,
+  type ChiefCommand,
   type ChiefDecision,
   type CompiledGraphScope,
   type CompiledWorkflowPlan,
   compileWorkflowDefinition,
   type ContextManifest,
+  edgeConditionSource,
   type GateNode,
+  type LiveAttemptProgress,
   type LoopNode,
   listWorkspaceSlots,
   type ManifestWorkspace,
   type ParallelNode,
   type RunWorkspaceBinding,
   type ScriptNode,
+  type ThinkingStep,
   type WaitRequest,
   type WorkflowDefinition,
   type WorkflowEvent,
@@ -32,6 +36,8 @@ import {
   SequentialIdGenerator,
   SystemClock,
 } from './memory-adapters';
+import { ISSUES_COLLECTION, issueFindings, type OpenFinding, openAssessmentFindings, sortFindings } from './findings';
+import { createNodeDataAccess, InMemoryNodeDataStore, type NodeDataStore } from './node-data';
 import {
   type AgentAdapter,
   type AgentExecutionResult,
@@ -64,9 +70,11 @@ import {
   resolveCompiledScopeByKey,
   reviveAncestorScopes,
 } from './scheduler/graph-reducer';
-import { pinAgent, resolveEffectiveAgentRef } from './agents/agent-resolution';
+import { pinAgent, resolveChiefAgent, resolveEffectiveAgentRef } from './agents/agent-resolution';
 import { applyChiefDecision } from './chief/apply';
-import { allowedChiefCommands, type ChiefSupervisor } from './chief/supervisor';
+import { buildChiefReviewContext, recordChiefReviewContext } from './chief/context';
+import { resolveChiefRuntimeOptions, type ChiefRuntimeOptions } from './chief/options';
+import { allowedChiefCommands, type ChiefReviewContext, type ChiefSupervisor } from './chief/supervisor';
 import { type ChiefTrigger, detectChiefTriggers } from './chief/triggers';
 import { diffRunState } from './state/run-log';
 import { deriveRunStatus, resolveWaitRequestInState } from './scheduler/wait-resolution';
@@ -87,7 +95,13 @@ export interface WorkflowRuntimeOptions {
   readonly adapters?: Readonly<Record<string, AgentAdapter>>;
   /** Supervises runs whose definition declares a `chief` policy. */
   readonly chief?: ChiefSupervisor;
+  /** Host controls for chief commands and diagnostic reads; existing defaults when omitted. */
+  readonly chiefOptions?: ChiefRuntimeOptions;
+  /** Host cap per parallel batch; the node's lower limit still applies. */
+  readonly parallelOptions?: { readonly maxConcurrency?: number };
   readonly workspaces?: WorkspaceManager;
+  /** Where steps keep intermediate data (default: in memory). */
+  readonly nodeData?: NodeDataStore;
   readonly clock?: Clock;
   readonly idGenerator?: IdGenerator;
 }
@@ -205,8 +219,35 @@ export function filesOutsideWriteScopes(
 const isWorkspaceSettleError = (err: unknown) =>
   err instanceof WorkspaceMergeConflictError || err instanceof WriteScopeViolationError;
 
+/** Chief commands that reopen execution, so they wait for running steps to finish. */
+const isHeldWhileBusy = (command: ChiefCommand) => command.kind === 'retry_node' || command.kind === 'rerun_from_node';
+
+/** How often a step whose changes did not merge is done again on the workspace as it is now. */
+const MERGE_REDOS = 1;
+
+/** Tells an agent doing a step again why its earlier changes did not land. */
+function mergeRedoNote(err: WorkspaceMergeConflictError): string {
+  const earlier = err.branch ? ` \`git show ${err.branch}\` shows the changes you made before.` : '';
+  const why = err.check
+    ? `## Your Earlier Changes Broke Together With Others\nYour changes merged with what other steps changed while you worked, but \`${err.check.command}\` failed on the result:\n\n\`\`\`\n${err.check.output}\n\`\`\`\n`
+    : `## Your Earlier Changes Did Not Merge\nWhile you worked, other steps changed ${err.files.length > 0 ? err.files.join(', ') : 'the same code'}, so your changes could not be applied.\n`;
+  return `\n\n${why}This is a fresh copy of the workspace with their changes in. Do your work again on top of it.${earlier}`;
+}
+
+class ParallelFailFastError extends Error {
+  constructor() { super('Cancelled because another parallel item failed'); this.name = 'AbortError'; }
+}
+
 /** Script logs longer than this are stored as artifacts; the report keeps only their tail. */
 const SCRIPT_LOG_INLINE_BYTES = 16 * 1024;
+
+/** A change was attempted on a run that has been cancelled. */
+export class RunCancelledError extends Error {
+  constructor(runId: string) {
+    super(`Run "${runId}" was cancelled`);
+    this.name = 'RunCancelledError';
+  }
+}
 
 export class ChiefUnavailableError extends Error {
   constructor(runId: string) {
@@ -254,15 +295,21 @@ export class WorkflowRuntime {
   readonly artifacts: ArtifactStore;
   readonly executor: Executor;
   readonly workspaces: WorkspaceManager;
+  readonly nodeData: NodeDataStore;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly agentRegistry?: AgentRegistry;
   private readonly adapters: Readonly<Record<string, AgentAdapter>>;
   private readonly chiefSupervisor?: ChiefSupervisor;
+  private readonly chiefOptions: ChiefRuntimeOptions;
+  private readonly parallelConcurrency: number;
   private commitLock: Promise<void> = Promise.resolve();
   private chiefLock: Promise<void> = Promise.resolve();
   /** Per-run event index the chief has already examined in this process. */
   private readonly chiefCursors = new Map<string, number>();
+  /** In-flight attempt progress keyed by `${runId}:${scopeKey}:${nodeId}`. */
+  private readonly liveProgress = new Map<string, LiveAttemptProgress>();
+  private readonly activeNodeExecutions = new Map<string, number>();
 
   constructor(options: WorkflowRuntimeOptions) {
     this.clock = options.clock ?? new SystemClock();
@@ -271,9 +318,14 @@ export class WorkflowRuntime {
     this.artifacts = options.artifacts ?? new InMemoryArtifactStore(this.clock);
     this.executor = options.executor;
     this.workspaces = options.workspaces ?? new InMemoryWorkspaceManager();
+    this.nodeData = options.nodeData ?? new InMemoryNodeDataStore(this.clock);
     this.agentRegistry = options.agentRegistry;
     this.adapters = options.adapters ?? {};
     this.chiefSupervisor = options.chief;
+    this.chiefOptions = resolveChiefRuntimeOptions(options.chiefOptions);
+    const cap = options.parallelOptions?.maxConcurrency;
+    if (cap !== undefined && (!Number.isSafeInteger(cap) || cap < 1)) throw new RangeError('parallelOptions.maxConcurrency must be a positive integer');
+    this.parallelConcurrency = cap ?? Infinity;
   }
 
   private resolveAgentAdapter(agent: PinnedAgent | undefined): AgentAdapter {
@@ -284,6 +336,95 @@ export class WorkflowRuntime {
     throw new Error(
       `Agent "${agent?.ref}" requires adapter "${name}", but no such adapter is registered`
     );
+  }
+
+  /** Live in-flight thinking/tool steps for a run (cleared once each attempt settles). */
+  getLiveProgress(runId: string): readonly LiveAttemptProgress[] {
+    const list: LiveAttemptProgress[] = [];
+    for (const item of this.liveProgress.values()) {
+      if (item.runId === runId) list.push(item);
+    }
+    return list;
+  }
+
+  private setAttemptProgress(progress: LiveAttemptProgress): void {
+    this.liveProgress.set(`${progress.runId}:${progress.scopeKey}:${progress.nodeId}`, progress);
+  }
+
+  private clearAttemptProgress(runId: string, scopeKey: string, nodeId: string): void {
+    this.liveProgress.delete(`${runId}:${scopeKey}:${nodeId}`);
+  }
+
+  private wrapChiefAdapter(
+    runId: string,
+    base: AgentAdapter,
+    triggerDetail: string
+  ): {
+    adapter: AgentAdapter;
+    getCaptured(): { durationMs: number; steps?: readonly ThinkingStep[] };
+    clear(): void;
+  } {
+    const startedAtMs = this.clock.nowMs();
+    const attemptId = `chief_${runId}_${startedAtMs}`;
+    let latestSteps: readonly ThinkingStep[] | undefined;
+    const initialSteps: ThinkingStep[] = [
+      {
+        id: 'chief-inspect',
+        kind: 'read',
+        status: 'done',
+        label: 'Inspected run state & active scopes',
+        startedAtMs,
+        completedAtMs: startedAtMs,
+      },
+      {
+        id: 'chief-think',
+        kind: 'think',
+        status: 'running',
+        label: triggerDetail ? `Evaluating: ${triggerDetail.slice(0, 72)}` : 'Evaluating how to proceed',
+        startedAtMs,
+      },
+    ];
+    this.setAttemptProgress({
+      runId,
+      scopeKey: '$root',
+      nodeId: '$chief',
+      attemptId,
+      startedAtMs,
+      steps: initialSteps,
+    });
+
+    return {
+      adapter: {
+        executeAgent: async (req) => {
+          const res = await base.executeAgent({
+            ...req,
+            onProgress: (steps) => {
+              latestSteps = steps;
+              this.setAttemptProgress({
+                runId,
+                scopeKey: '$root',
+                nodeId: '$chief',
+                attemptId: req.attemptId,
+                startedAtMs,
+                steps,
+              });
+              req.onProgress?.(steps);
+            },
+          });
+          if (res.receipt?.steps && res.receipt.steps.length > 0) {
+            latestSteps = res.receipt.steps;
+          }
+          return res;
+        },
+      },
+      getCaptured: () => ({
+        durationMs: Math.max(0, this.clock.nowMs() - startedAtMs),
+        ...(latestSteps ? { steps: latestSteps } : {}),
+      }),
+      clear: () => {
+        this.clearAttemptProgress(runId, '$root', '$chief');
+      },
+    };
   }
 
   private async withCommitLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -321,6 +462,8 @@ export class WorkflowRuntime {
     epoch: number,
     expectedSeq: number
   ): Promise<WorkflowRunState> {
+    // A cancelled run stays stopped: late results from steps still winding down are dropped.
+    if (base.status === 'CANCELLED') throw new RunCancelledError(base.runId);
     const mutations = diffRunState(base, nextState);
     if (mutations.length === 0) {
       return base;
@@ -338,6 +481,7 @@ export class WorkflowRuntime {
    * (it may run alongside other writers) and the workspace manager can make copies.
    */
   private async forkWorkspace(
+    plan: CompiledWorkflowPlan,
     runId: string,
     attemptId: string,
     compiledScope: CompiledGraphScope,
@@ -345,7 +489,8 @@ export class WorkflowRuntime {
     workspace: RunWorkspaceBinding | undefined
   ): Promise<IsolatedWorkspace | null> {
     if (!workspace || !compiledScope.writePolicies[node.id]?.isolated || !this.workspaces.isolate) return null;
-    return await this.workspaces.isolate({ runId, attemptId, nodeId: node.id, workspace });
+    const mergeCheck = plan.definition.workspaces.find((slot) => slot.name === workspace.slot)?.mergeCheck;
+    return await this.workspaces.isolate({ runId, attemptId, nodeId: node.id, workspace, ...(mergeCheck ? { mergeCheck } : {}) });
   }
 
   /**
@@ -787,11 +932,110 @@ export class WorkflowRuntime {
   }
 
   /**
+   * Problems still open in a run, most severe first: what each reviewing step's latest current
+   * assessment left (a loop's last round speaks for it; PASS may carry minor findings) and the
+   * issues steps logged in the `issues` collection. Meant for a closing step that hands the
+   * rest over to a person, and for hosts that report it.
+   */
+  async getOpenFindings(runId: string): Promise<OpenFinding[]> {
+    const state = await this.store.getRun(runId);
+    if (!state) throw new Error(`Run "${runId}" not found`);
+    const issues = await this.nodeData.query({ runId, collection: ISSUES_COLLECTION, limit: 2000 });
+    return sortFindings([...openAssessmentFindings(state), ...issueFindings(issues)]);
+  }
+
+  /**
+   * Stops a run for good: it ends `CANCELLED`, open questions are withdrawn and no step starts
+   * again. Steps still executing are their driver's to abort; whatever they return afterwards
+   * is not recorded. A run that already finished is returned as it is.
+   */
+  async cancelRun(input: { runId: string }): Promise<WorkflowRunState> {
+    const initial = await this.store.getRun(input.runId);
+    if (!initial) throw new Error(`Run "${input.runId}" not found`);
+    if (initial.status === 'SUCCEEDED' || initial.status === 'FAILED' || initial.status === 'CANCELLED') return initial;
+    const cancelled = await this.applyLinearizedMutation(input.runId, initial.coordinatorEpoch, (latest) => ({
+      ...latest,
+      status: 'CANCELLED',
+      waitRequests: Object.fromEntries(
+        Object.entries(latest.waitRequests).map(([id, wait]) => [id, wait.status === 'PENDING' ? { ...wait, status: 'CANCELLED' } : wait])
+      ),
+      events: [...latest.events, { type: 'run.finished', runId: latest.runId, status: 'CANCELLED', timestampMs: this.clock.nowMs() }],
+    }));
+    for (const [key, progress] of this.liveProgress) if (progress.runId === input.runId) this.liveProgress.delete(key);
+    return cancelled;
+  }
+
+  /**
    * Has the chief answer a `chief.user_message`: it replies in plain language and may issue
    * commands, which are checked against the run's chief policy like any other intervention.
    * A run the commands set running again (e.g. a rerun) still needs a driver.
    */
   async answerChiefMessage(input: { runId: string; messageId: string; signal?: AbortSignal }): Promise<WorkflowRunState> {
+    return (await this.replyToChiefMessage(input)).state;
+  }
+
+  /**
+   * Like `answerChiefMessage`, for a run whose steps may be executing: with `holdWhileBusy`,
+   * retries and reruns (which must wait for running steps to finish) are left out of the
+   * reply and returned as `held`, to apply with `applyHeldChiefCommands` once the run settles.
+   */
+  async replyToChiefMessage(input: {
+    runId: string;
+    messageId: string;
+    signal?: AbortSignal;
+    holdWhileBusy?: boolean;
+  }): Promise<{ state: WorkflowRunState; held: ChiefCommand[] }> {
+    let held: ChiefCommand[] = [];
+    const state = await this.answerChiefMessageNow(input, (decision) => {
+      if (!input.holdWhileBusy || (this.activeNodeExecutions.get(input.runId) ?? 0) === 0) return decision;
+      held = decision.commands.filter(isHeldWhileBusy);
+      return held.length > 0 ? { ...decision, commands: decision.commands.filter((c) => !isHeldWhileBusy(c)) } : decision;
+    });
+    return { state, held };
+  }
+
+  /**
+   * Applies retries and reruns the chief asked for in reply to `messageId` while steps were
+   * still executing, through the policy filter like any other intervention.
+   */
+  async applyHeldChiefCommands(input: {
+    runId: string;
+    messageId: string;
+    commands: readonly ChiefCommand[];
+    signal?: AbortSignal;
+  }): Promise<WorkflowRunState> {
+    const initial = await this.store.getRun(input.runId);
+    if (!initial) throw new Error(`Run "${input.runId}" not found`);
+    const policy = initial.definition.chief;
+    if (!policy || input.commands.length === 0) return initial;
+    const plan = compileWorkflowDefinition(initial.definition);
+    return await this.withChiefLock(async () => {
+      const latest = (await this.store.getRun(input.runId)) ?? initial;
+      const chiefAgent = await resolveChiefAgent(this.agentRegistry, latest, policy).catch(() => undefined);
+      return await this.applyLinearizedMutation(input.runId, latest.coordinatorEpoch, (fresh) => {
+        input.signal?.throwIfAborted();
+        return applyChiefDecision({
+          plan,
+          state: fresh,
+          policy,
+          trigger: { kind: 'user.message', messageId: input.messageId, detail: '' },
+          decision: { rationale: 'Held until the running steps finished', commands: [...input.commands] },
+          processedEventCount: fresh.chief.processedEventCount,
+          ...(chiefAgent ? { chiefAgent } : {}),
+          resolvedAgents: {},
+          allowedCommands: this.chiefOptions.allowedCommands,
+          hasActiveNodeExecutions: (this.activeNodeExecutions.get(input.runId) ?? 0) > 0,
+          nowMs: this.clock.nowMs(),
+          newId: (prefix) => this.nextUniqueId(prefix, fresh.waitRequests),
+        }).nextState;
+      });
+    });
+  }
+
+  private async answerChiefMessageNow(
+    input: { runId: string; messageId: string; signal?: AbortSignal },
+    adjust: (decision: ChiefDecision) => ChiefDecision
+  ): Promise<WorkflowRunState> {
     const supervisor = this.chiefSupervisor;
     const initial = await this.store.getRun(input.runId);
     if (!initial) throw new Error(`Run "${input.runId}" not found`);
@@ -806,35 +1050,46 @@ export class WorkflowRuntime {
 
     return await this.withChiefLock(async () => {
       const latest = (await this.store.getRun(input.runId)) ?? initial;
+      if (latest.events.some(event => event.type === 'chief.intervened' && event.inReplyTo === input.messageId)) return latest;
       const trigger: ChiefTrigger = { kind: 'user.message', messageId: message.messageId, detail: message.text };
-      const chiefAgent = policy.agentRef
-        ? await pinAgent(this.agentRegistry, latest, policy.agentRef).catch(() => undefined)
-        : undefined;
+      let chiefAgent: PinnedAgent | undefined;
+      let context: ChiefReviewContext | undefined;
+      let tracked: ReturnType<WorkflowRuntime['wrapChiefAdapter']> | undefined;
       let decision: ChiefDecision;
       try {
-        decision = await supervisor.review({
-          plan,
-          state: latest,
-          policy,
-          trigger,
-          ...(chiefAgent ? { chiefAgent } : {}),
-          adapter: this.resolveAgentAdapter(chiefAgent),
-          allowedCommands: allowedChiefCommands(policy),
-          ...(input.signal ? { signal: input.signal } : {}),
-        });
+        chiefAgent = await resolveChiefAgent(this.agentRegistry, latest, policy);
+        tracked = this.wrapChiefAdapter(input.runId, this.resolveAgentAdapter(chiefAgent), trigger.detail);
+        context = await buildChiefReviewContext({ state: latest, artifacts: this.artifacts, clock: this.clock, idGenerator: this.idGenerator, agent: chiefAgent, context: this.chiefOptions.context });
+        decision = adjust(
+          await supervisor.review({
+            plan,
+            state: latest,
+            policy,
+            trigger,
+            ...(chiefAgent ? { chiefAgent } : {}),
+            adapter: tracked.adapter,
+            context,
+            allowedCommands: allowedChiefCommands(policy, this.chiefOptions.allowedCommands),
+            ...(input.signal ? { signal: input.signal } : {}),
+          })
+        );
       } catch (err) {
         if (isAbortError(err, input.signal)) throw err;
         const reason = err instanceof Error ? err.message : String(err);
         decision = { rationale: `Chief review failed: ${reason}`, reply: `I could not answer: ${reason}`, commands: [] };
+      } finally {
+        tracked?.clear();
       }
+      const captured = tracked?.getCaptured() ?? { durationMs: 0 };
       const resolvedAgents: Record<string, PinnedAgent> = {};
       for (const command of decision.commands) {
-        if (command.kind !== 'swap_agent') continue;
+        if (command.kind !== 'swap_agent' || !allowedChiefCommands(policy, this.chiefOptions.allowedCommands).includes(command.kind)) continue;
         const pinned = await pinAgent(this.agentRegistry, latest, command.agentRef).catch(() => undefined);
         if (pinned) resolvedAgents[command.agentRef] = pinned;
       }
-      return await this.applyLinearizedMutation(input.runId, latest.coordinatorEpoch, (fresh) =>
-        applyChiefDecision({
+      return await this.applyLinearizedMutation(input.runId, latest.coordinatorEpoch, (fresh) => {
+        input.signal?.throwIfAborted();
+        return recordChiefReviewContext(applyChiefDecision({
           plan,
           state: fresh,
           policy,
@@ -843,10 +1098,14 @@ export class WorkflowRuntime {
           processedEventCount: fresh.chief.processedEventCount,
           ...(chiefAgent ? { chiefAgent } : {}),
           resolvedAgents,
+          allowedCommands: this.chiefOptions.allowedCommands,
+          hasActiveNodeExecutions: (this.activeNodeExecutions.get(input.runId) ?? 0) > 0,
+          durationMs: captured.durationMs,
+          ...(captured.steps ? { steps: captured.steps } : {}),
           nowMs: this.clock.nowMs(),
           newId: (prefix) => this.nextUniqueId(prefix, fresh.waitRequests),
-        }).nextState
-      );
+        }).nextState, context);
+      });
     });
   }
 
@@ -886,39 +1145,46 @@ export class WorkflowRuntime {
         ) {
           break;
         }
-        const chiefAgent = policy.agentRef
-          ? await pinAgent(this.agentRegistry, latest, policy.agentRef).catch(() => undefined)
-          : undefined;
-
+        let chiefAgent: PinnedAgent | undefined;
+        let context: ChiefReviewContext | undefined;
+        let tracked: ReturnType<WorkflowRuntime['wrapChiefAdapter']> | undefined;
         let decision: ChiefDecision;
         try {
+          chiefAgent = await resolveChiefAgent(this.agentRegistry, latest, policy);
+          tracked = this.wrapChiefAdapter(runId, this.resolveAgentAdapter(chiefAgent), trigger.detail);
+          context = await buildChiefReviewContext({ state: latest, artifacts: this.artifacts, clock: this.clock, idGenerator: this.idGenerator, agent: chiefAgent, context: this.chiefOptions.context });
           decision = await supervisor.review({
             plan,
             state: latest,
             policy,
             trigger,
             ...(chiefAgent ? { chiefAgent } : {}),
-            adapter: this.resolveAgentAdapter(chiefAgent),
-            allowedCommands: allowedChiefCommands(policy),
+            adapter: tracked.adapter,
+            context,
+            allowedCommands: allowedChiefCommands(policy, this.chiefOptions.allowedCommands),
             ...(signal ? { signal } : {}),
           });
         } catch (err) {
           if (isAbortError(err, signal)) throw err;
           const message = err instanceof Error ? err.message : String(err);
           decision = { rationale: `Chief review failed: ${message}`, commands: [] };
+        } finally {
+          tracked?.clear();
         }
+        const captured = tracked?.getCaptured() ?? { durationMs: 0 };
 
         const resolvedAgents: Record<string, PinnedAgent> = {};
         for (const command of decision.commands) {
-          if (command.kind !== 'swap_agent') continue;
+          if (command.kind !== 'swap_agent' || !allowedChiefCommands(policy, this.chiefOptions.allowedCommands).includes(command.kind)) continue;
           const pinned = await pinAgent(this.agentRegistry, latest, command.agentRef).catch(
             () => undefined
           );
           if (pinned) resolvedAgents[command.agentRef] = pinned;
         }
 
-        latest = await this.applyLinearizedMutation(runId, epoch, (fresh) =>
-          applyChiefDecision({
+        latest = await this.applyLinearizedMutation(runId, epoch, (fresh) => {
+          signal?.throwIfAborted();
+          return recordChiefReviewContext(applyChiefDecision({
             plan,
             state: fresh,
             policy,
@@ -927,10 +1193,14 @@ export class WorkflowRuntime {
             processedEventCount,
             ...(chiefAgent ? { chiefAgent } : {}),
             resolvedAgents,
+            allowedCommands: this.chiefOptions.allowedCommands,
+            hasActiveNodeExecutions: (this.activeNodeExecutions.get(runId) ?? 0) > 0,
+            durationMs: captured.durationMs,
+            ...(captured.steps ? { steps: captured.steps } : {}),
             nowMs: this.clock.nowMs(),
             newId: (prefix) => this.nextUniqueId(prefix, fresh.waitRequests),
-          }).nextState
-        );
+          }).nextState, context);
+        });
       }
       return latest;
     });
@@ -946,17 +1216,42 @@ export class WorkflowRuntime {
     signal?: AbortSignal
   ): Promise<WorkflowRunState> {
     const node = compiledScope.nodesById[nodeId]!;
-    switch (node.kind) {
-      case 'agent':
-        return await this.executeAgentNode(plan, state, scopeKey, compiledScope, node, epoch, signal);
-      case 'script':
-        return await this.executeScriptNode(plan, state, scopeKey, compiledScope, node, epoch, signal);
-      case 'gate':
-        return await this.executeGateNode(plan, state, scopeKey, compiledScope, node, epoch);
-      case 'loop':
-        return await this.executeLoopNode(plan, state, scopeKey, compiledScope, node, epoch, signal);
-      case 'parallel':
-        return await this.executeParallelNode(plan, state, scopeKey, compiledScope, node, epoch, signal);
+    const leaf = node.kind !== 'loop' && node.kind !== 'parallel';
+    if (leaf) this.activeNodeExecutions.set(state.runId, (this.activeNodeExecutions.get(state.runId) ?? 0) + 1);
+    try {
+      switch (node.kind) {
+        case 'agent':
+          return await this.executeAgentNode(plan, state, scopeKey, compiledScope, node, epoch, signal);
+        case 'script':
+          return await this.executeScriptNode(plan, state, scopeKey, compiledScope, node, epoch, signal);
+        case 'gate':
+          return await this.executeGateNode(plan, state, scopeKey, compiledScope, node, epoch);
+        case 'subflow':
+          // Resolved sub-flows compile into loops; reaching one here means nobody embedded it.
+          return await this.failNodeOutright(
+            plan,
+            state,
+            scopeKey,
+            compiledScope,
+            node.id,
+            epoch,
+            `Sub-flow "${node.name}" was not resolved: start runs through a host that embeds sub-flows (resolveSubflows)`
+          );
+        case 'loop':
+          return await this.executeLoopNode(plan, state, scopeKey, compiledScope, node, epoch, signal);
+        case 'parallel':
+          return await this.executeParallelNode(plan, state, scopeKey, compiledScope, node, epoch, signal);
+        default: {
+          const unsupported: never = node;
+          throw new Error(`Unsupported workflow node: ${String(unsupported)}`);
+        }
+      }
+    } finally {
+      if (leaf) {
+        const remaining = (this.activeNodeExecutions.get(state.runId) ?? 1) - 1;
+        if (remaining > 0) this.activeNodeExecutions.set(state.runId, remaining);
+        else this.activeNodeExecutions.delete(state.runId);
+      }
     }
   }
 
@@ -1065,7 +1360,7 @@ export class WorkflowRuntime {
 
     const bound = resolveNodeWorkspace(state, compiledScope, node);
     // A step that may write alongside others works in its own copy, merged back afterwards.
-    const fork = await this.forkWorkspace(state.runId, attemptId, compiledScope, node, bound.workspace);
+    let fork = await this.forkWorkspace(plan, state.runId, attemptId, compiledScope, node, bound.workspace);
     let forkSettled = false;
     const placement = fork ? withWorkspacePath(bound, fork.path) : bound;
 
@@ -1114,8 +1409,42 @@ export class WorkflowRuntime {
       });
 
       const startedAtMs = this.clock.nowMs();
+      const inputPills = bundle.manifest.entries.map((entry) => ({
+        label: entry.portName,
+        badge: entry.mode === 'artifact_ref' ? 'ART' : 'IN',
+      }));
+      this.setAttemptProgress({
+        runId: state.runId,
+        scopeKey,
+        nodeId: node.id,
+        attemptId,
+        startedAtMs,
+        steps: [
+          {
+            id: `${attemptId}:prepare`,
+            kind: 'read',
+            status: 'done',
+            label:
+              inputPills.length > 0
+                ? `Prepared ${inputPills.length} input${inputPills.length === 1 ? '' : 's'}`
+                : 'Prepared context & workspace',
+            ...(inputPills.length > 0 ? { pills: inputPills } : {}),
+            startedAtMs,
+            completedAtMs: startedAtMs,
+          },
+          {
+            id: `${attemptId}:start`,
+            kind: 'think',
+            status: 'running',
+            label: node.producesAssessment ? 'Reviewing against acceptance criteria' : `Working on "${node.name}"`,
+            startedAtMs,
+          },
+        ],
+      });
       let execResult;
       let retryCount = prevNodeState.retryCount;
+      let renderedPrompt = bundle.renderedPrompt;
+      let mergeRedos = 0;
 
       while (true) {
         try {
@@ -1124,12 +1453,15 @@ export class WorkflowRuntime {
             scopeKey,
             attemptId,
             invocationId,
+            retryIndex: retryCount,
+            roundIndex,
             node,
             agent,
             manifest: bundle.manifest,
-            renderedPrompt: bundle.renderedPrompt,
+            renderedPrompt,
             inputs: bundle.resolvedInputs,
             artifactReader,
+            data: createNodeDataAccess(this.nodeData, { runId: state.runId, scopeKey, nodeId: node.id, attemptId }, { findings: () => this.getOpenFindings(state.runId) }),
             ...(placement.workspace ? { workspace: placement.workspace } : {}),
             ...(placement.readWorkspaces.length ? { readWorkspaces: placement.readWorkspaces } : {}),
             ...(fork ? { isolated: true } : {}),
@@ -1140,19 +1472,43 @@ export class WorkflowRuntime {
                   responderId: resolvedWait.response.responderId,
                 }
               : undefined,
+            onProgress: (steps) => {
+              this.setAttemptProgress({
+                runId: state.runId,
+                scopeKey,
+                nodeId: node.id,
+                attemptId,
+                startedAtMs,
+                steps,
+              });
+            },
             signal,
           });
+          signal?.throwIfAborted();
           assertReviewVerdict(node, execResult);
           forkSettled = fork !== null;
           const changes = await this.settleWorkspaceChanges(fork, compiledScope, node, execResult.changes);
           execResult = { ...execResult, ...(changes ? { changes } : {}) };
           break;
         } catch (err) {
-          if (isAbortError(err, signal)) {
+          if (isAbortError(err, signal) && !(signal?.reason instanceof ParallelFailFastError)) {
             throw err;
           }
-          if (retryCount < node.maxTechnicalRetries && !isWorkspaceSettleError(err)) {
+          if (retryCount < node.maxTechnicalRetries && !isWorkspaceSettleError(err) && !signal?.aborted) {
             retryCount += 1;
+            continue;
+          }
+          // Its changes clashed with others made meanwhile: do it again on the workspace as it is now.
+          const again =
+            err instanceof WorkspaceMergeConflictError && mergeRedos < MERGE_REDOS && !signal?.aborted
+              ? await this.forkWorkspace(plan, state.runId, attemptId, compiledScope, node, bound.workspace)
+              : null;
+          if (again) {
+            fork = again;
+            forkSettled = false;
+            mergeRedos += 1;
+            retryCount += 1;
+            renderedPrompt = bundle.renderedPrompt + mergeRedoNote(err as WorkspaceMergeConflictError);
             continue;
           }
           const failedAtMs = this.clock.nowMs();
@@ -1395,6 +1751,7 @@ export class WorkflowRuntime {
         })
       );
     } finally {
+      this.clearAttemptProgress(state.runId, scopeKey, node.id);
       if (fork && !forkSettled) await fork.discard().catch(() => undefined);
       await this.workspaces.releaseLease(lease.leaseId);
     }
@@ -1424,7 +1781,7 @@ export class WorkflowRuntime {
     }
 
     const bound = resolveNodeWorkspace(state, compiledScope, node).workspace;
-    const fork = await this.forkWorkspace(state.runId, attemptId, compiledScope, node, bound);
+    let fork = await this.forkWorkspace(plan, state.runId, attemptId, compiledScope, node, bound);
     let forkSettled = false;
     const workspace = fork && bound ? { ...bound, path: fork.path } : bound;
     const lease = await this.workspaces.acquireLease({
@@ -1436,8 +1793,27 @@ export class WorkflowRuntime {
 
     try {
       const startedAtMs = this.clock.nowMs();
+      const cmdLabel = [node.command, ...node.args].join(' ').slice(0, 64);
+      this.setAttemptProgress({
+        runId: state.runId,
+        scopeKey,
+        nodeId: node.id,
+        attemptId,
+        startedAtMs,
+        steps: [
+          {
+            id: `${attemptId}:exec`,
+            kind: 'execute',
+            status: 'running',
+            label: `Running ${cmdLabel}`,
+            startedAtMs,
+          },
+        ],
+      });
       let scriptRes;
-      try {
+      let mergeRedos = 0;
+      // Runs again (once) when its changes clashed with others made meanwhile.
+      while (true) try {
         scriptRes = await this.executor.executeScript({
           runId: state.runId,
           scopeKey,
@@ -1445,16 +1821,29 @@ export class WorkflowRuntime {
           invocationId,
           node,
           inputs: resolvedInputs,
+          data: createNodeDataAccess(this.nodeData, { runId: state.runId, scopeKey, nodeId: node.id, attemptId }, { findings: () => this.getOpenFindings(state.runId) }),
           ...(workspace ? { workspace } : {}),
           ...(fork ? { isolated: true } : {}),
           signal,
         });
+        signal?.throwIfAborted();
         forkSettled = fork !== null;
         const changes = await this.settleWorkspaceChanges(fork, compiledScope, node, scriptRes.changes);
         scriptRes = { ...scriptRes, ...(changes ? { changes } : {}) };
+        break;
       } catch (err) {
-        if (isAbortError(err, signal)) {
+        if (isAbortError(err, signal) && !(signal?.reason instanceof ParallelFailFastError)) {
           throw err;
+        }
+        const again =
+          err instanceof WorkspaceMergeConflictError && mergeRedos < MERGE_REDOS && !signal?.aborted
+            ? await this.forkWorkspace(plan, state.runId, attemptId, compiledScope, node, bound)
+            : null;
+        if (again) {
+          fork = again;
+          forkSettled = false;
+          mergeRedos += 1;
+          continue;
         }
         const failedAtMs = this.clock.nowMs();
         const errorMessage = err instanceof Error ? err.message : String(err);
@@ -1643,9 +2032,44 @@ export class WorkflowRuntime {
         })
       );
     } finally {
+      this.clearAttemptProgress(state.runId, scopeKey, node.id);
       if (fork && !forkSettled) await fork.discard().catch(() => undefined);
       await this.workspaces.releaseLease(lease.leaseId);
     }
+  }
+
+  /** Records a node as failed without running anything (e.g. it cannot run as defined). */
+  private async failNodeOutright(
+    plan: CompiledWorkflowPlan,
+    state: WorkflowRunState,
+    scopeKey: string,
+    compiledScope: CompiledGraphScope,
+    nodeId: string,
+    epoch: number,
+    error: string
+  ): Promise<WorkflowRunState> {
+    const attemptId = this.nextUniqueId('att', state.attempts);
+    const now = this.clock.nowMs();
+    return await this.commitNodeOrScopeTransition(plan, state.runId, scopeKey, compiledScope, epoch, (latestScope) => ({
+      nodeId,
+      nodeState: { ...latestScope.nodes[nodeId]!, status: 'FAILED', latestAttemptId: attemptId, error },
+      attempt: {
+        attemptId,
+        invocationId: this.nextUniqueId('inv'),
+        runId: state.runId,
+        scopeKey,
+        nodeId,
+        retryIndex: 0,
+        roundIndex: latestScope.roundIndex ?? 0,
+        phase: 'open',
+        status: 'FAILED',
+        producedArtifactIds: [],
+        error,
+        startedAtMs: now,
+        completedAtMs: now,
+      },
+      events: [{ type: 'node.completed', runId: state.runId, scopeKey, nodeId, attemptId, status: 'FAILED', timestampMs: now }],
+    }));
   }
 
   private async executeGateNode(
@@ -1752,8 +2176,16 @@ export class WorkflowRuntime {
     while (roundIndex < roundLimit()) {
       const roundScopeKey = `${scopeKey}/${node.id}:round_${roundIndex}`;
       if (!state.scopes[roundScopeKey]) {
+        // Values the previous round hands on (data edges drawn back into the loop).
+        const carried: Record<string, PortValueRecord> = {};
+        const previousRound = roundIndex > 0 ? state.scopes[`${scopeKey}/${node.id}:round_${roundIndex - 1}`] : undefined;
+        for (const carry of previousRound ? (node.carry ?? []) : []) {
+          const value = previousRound!.nodes[carry.fromNodeId]?.outputs[carry.fromPort];
+          if (value !== undefined) carried[carry.toPort] = value;
+        }
         const roundInputs: Record<string, PortValueRecord> = {
           ...loopInputs,
+          ...carried,
           ...(priorRoundFeedback
             ? { __priorRoundFeedback: { value: priorRoundFeedback } }
             : {}),
@@ -1798,7 +2230,10 @@ export class WorkflowRuntime {
         if (!stepped.progressed) break;
       }
 
-      const settledRoundScope = state.scopes[roundScopeKey]!;
+      const settledRoundScope = state.scopes[roundScopeKey];
+      // A chief rerun can discard this round (or the whole container). Let the
+      // parent scheduler reopen it instead of continuing with a removed scope.
+      if (!settledRoundScope) return state;
       if (settledRoundScope.status === 'RUNNING') {
         // Round paused (e.g. chief escalation) rather than finished; leave the loop PENDING.
         return state;
@@ -1839,9 +2274,8 @@ export class WorkflowRuntime {
 
       // Check loop continuation predicate (`continueWhen`, e.g. `verdict_is: NEEDS_FIX`)
       const lastNodeId =
-        node.continueWhen.kind !== 'always' && node.continueWhen.sourceNodeId
-          ? node.continueWhen.sourceNodeId
-          : childCompiledScope.topologicalOrder[childCompiledScope.topologicalOrder.length - 1]!;
+        edgeConditionSource(node.continueWhen) ??
+        childCompiledScope.topologicalOrder[childCompiledScope.topologicalOrder.length - 1]!;
       const shouldContinue = evaluateEdgeCondition(
         node.continueWhen,
         lastNodeId,
@@ -2061,14 +2495,13 @@ export class WorkflowRuntime {
     const childCompiledScope = compiledScope.childScopes[node.id]!;
     const parentScope = state.scopes[scopeKey]!;
     const parallelInputs = this.resolveNodeInputsFromDataEdges(compiledScope, parentScope, node.id);
-    const rawItems = parallelInputs[node.itemsPort]?.value;
-    const items = Array.isArray(rawItems) ? rawItems : [];
-
-    const itemScopeKeys: string[] = [];
-    for (let idx = 0; idx < items.length; idx++) {
-      itemScopeKeys.push(`${scopeKey}/${node.id}[${idx}]`);
+    const rawItems = parallelInputs[node.itemsPort]?.value ?? node.inputs.find(p => p.name === node.itemsPort)?.defaultValue;
+    if (node.origin && !Array.isArray(rawItems)) {
+      return this.failNodeOutright(plan, state, scopeKey, compiledScope, node.id, epoch,
+        `Parallel input "${node.itemsPort}" must be an array`);
     }
-
+    const items = coerceParallelItems(rawItems);
+    const itemScopeKeys = items.map((_, idx) => `${scopeKey}/${node.id}[${idx}]`);
     state = await this.applyLinearizedMutation(state.runId, epoch, (latest) => {
       const nextScopes = { ...latest.scopes };
       for (let idx = 0; idx < items.length; idx++) {
@@ -2076,124 +2509,95 @@ export class WorkflowRuntime {
         if (!nextScopes[itemKey]) {
           nextScopes[itemKey] = createInitialScopeState(childCompiledScope, itemKey, {
             ...parallelInputs,
-            item: { value: items[idx] },
+            // Inside, the items port holds this one item (with its artifact ref when the list carried refs).
+            [node.itemsPort]: parallelInputs[node.itemsPort]?.items?.[idx] ?? { value: items[idx] },
             itemIndex: { value: idx },
           });
         }
       }
-      return {
-        ...latest,
-        scopes: nextScopes,
-      };
+      return { ...latest, scopes: nextScopes };
     });
 
-    // Execute item scopes with bounded concurrency (`node.maxConcurrency`)
-    const concurrency = Math.max(1, Math.min(node.maxConcurrency, itemScopeKeys.length || 1));
+    const concurrency = Math.min(node.maxConcurrency, this.parallelConcurrency, itemScopeKeys.length || 1);
+    const stop = new AbortController();
+    const itemSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
     let queueIndex = 0;
-    let failFastTriggered = false;
-
     const runItemWorker = async (): Promise<void> => {
-      while (!failFastTriggered) {
+      while (!itemSignal.aborted) {
         const idx = queueIndex++;
         if (idx >= itemScopeKeys.length) break;
         const itemKey = itemScopeKeys[idx]!;
-
-        while (!failFastTriggered) {
+        while (!itemSignal.aborted) {
           const latest = await this.store.getRun(state.runId);
-          if (!latest || latest.scopes[itemKey]?.status !== 'RUNNING') {
-            break;
+          if (!latest || latest.scopes[itemKey]?.status !== 'RUNNING') break;
+          try {
+            const stepped = await this.stepScope(plan, latest, itemKey, childCompiledScope, epoch, itemSignal);
+            if (stepped.state.scopes[itemKey]?.status === 'FAILED' && node.failurePolicy === 'fail_fast') {
+              stop.abort(new ParallelFailFastError());
+              break;
+            }
+            if (!stepped.progressed) break;
+          } catch (error) {
+            if (stop.signal.aborted && !signal?.aborted && isAbortError(error, itemSignal)) break;
+            throw error;
           }
-          const stepped = await this.stepScope(
-            plan,
-            latest,
-            itemKey,
-            childCompiledScope,
-            epoch,
-            signal
-          );
-          if (
-            stepped.state.scopes[itemKey]?.status === 'FAILED' &&
-            node.failurePolicy === 'fail_fast'
-          ) {
-            failFastTriggered = true;
-            break;
-          }
-          if (!stepped.progressed) break;
         }
       }
     };
+    // Await every worker before returning/throwing: no background commits after cancellation.
+    const workers = await Promise.allSettled(Array.from({ length: concurrency }, () => runItemWorker()));
+    signal?.throwIfAborted();
+    const rejected = workers.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (rejected) throw rejected.reason;
 
-    await Promise.all(Array.from({ length: concurrency }, () => runItemWorker()));
-
-    const finalState = (await this.store.getRun(state.runId)) ?? state;
-    if (!failFastTriggered && itemScopeKeys.some((k) => finalState.scopes[k]?.status === 'RUNNING')) {
-      // Items paused (e.g. chief escalation) rather than finished; leave the node PENDING.
+    let finalState = (await this.store.getRun(state.runId)) ?? state;
+    // Chief may have invalidated/replaced this batch while a worker was settling.
+    if (itemScopeKeys.some(key => !finalState.scopes[key])) return finalState;
+    if (stop.signal.aborted) {
+      finalState = await this.applyLinearizedMutation(state.runId, epoch, latest => {
+        const scopes = { ...latest.scopes };
+        const waitRequests = { ...latest.waitRequests };
+        for (const [key, current] of Object.entries(scopes)) {
+          if (!itemScopeKeys.some(k => key === k || key.startsWith(`${k}/`))) continue;
+          if (current.status === 'SUCCEEDED' || current.status === 'FAILED') continue;
+          scopes[key] = { ...current, status: 'FAILED', nodes: Object.fromEntries(Object.entries(current.nodes).map(([id, n]) =>
+            [id, ['SUCCEEDED', 'FAILED', 'SKIPPED'].includes(n.status) ? n : { ...n, status: 'SKIPPED', error: stop.signal.reason.message, activeWaitRequestId: undefined }])) };
+          for (const [id, wait] of Object.entries(waitRequests)) {
+            if (wait.scopeKey === key && wait.status === 'PENDING') waitRequests[id] = { ...wait, status: 'CANCELLED' };
+          }
+        }
+        return { ...latest, scopes, waitRequests };
+      });
+    } else if (itemScopeKeys.some(k => finalState.scopes[k]?.status === 'RUNNING')) {
       return finalState;
     }
-    const anyWaiting = itemScopeKeys.some((k) => finalState.scopes[k]?.status === 'WAITING');
-    if (anyWaiting) {
-      return await this.commitNodeOrScopeTransition(
-        plan,
-        state.runId,
-        scopeKey,
-        compiledScope,
-        epoch,
-        (latestScope) => ({
-          nodeId: node.id,
-          nodeState: {
-            ...latestScope.nodes[node.id]!,
-            status: 'WAITING',
-          },
-        })
-      );
-    }
 
-    const anyFailed = itemScopeKeys.some((k) => finalState.scopes[k]?.status === 'FAILED');
-    if (anyFailed && node.failurePolicy === 'fail_fast') {
-      return await this.commitNodeOrScopeTransition(
-        plan,
-        state.runId,
-        scopeKey,
-        compiledScope,
-        epoch,
-        (latestScope) => ({
-          nodeId: node.id,
-          nodeState: {
-            ...latestScope.nodes[node.id]!,
-            status: 'FAILED',
-          },
-        })
-      );
-    }
-
-    const aggregatedResults: unknown[] = [];
-    for (const itemKey of itemScopeKeys) {
-      const itemScope = finalState.scopes[itemKey]!;
-      const firstOutputPort = node.outputs[0]?.name ?? 'results';
-      const itemOut =
-        itemScope.outputs[firstOutputPort]?.value ??
-        Object.values(itemScope.outputs)[0]?.value;
-      aggregatedResults.push(itemOut);
-    }
-
-    const outPortName = node.outputs[0]?.name ?? 'results';
-    return await this.commitNodeOrScopeTransition(
-      plan,
-      state.runId,
-      scopeKey,
-      compiledScope,
-      epoch,
-      (latestScope) => ({
-        nodeId: node.id,
-        nodeState: {
-          ...latestScope.nodes[node.id]!,
-          status: 'SUCCEEDED',
-          outputs: {
-            [outPortName]: { value: aggregatedResults },
-          },
-        },
-      })
-    );
+    const parallelItems = itemScopeKeys.map(key => {
+      const item = finalState.scopes[key]!;
+      const missing = node.outputs.filter(p => p.required && !(p.name in item.outputs));
+      const error = Object.values(item.nodes).find(n => n.error)?.error
+        ?? (item.status === 'SUCCEEDED' && missing.length ? `Missing required outputs: ${missing.map(p => p.name).join(', ')}` : undefined);
+      const verdict = node.origin ? item.nodes[node.id]?.latestVerdict : undefined;
+      return { scopeKey: key, status: error && item.status === 'SUCCEEDED' ? 'FAILED' as const : item.status, outputs: item.outputs, ...(error ? { error } : {}), ...(verdict ? { verdict } : {}) };
+    });
+    const outputNames = new Set([...node.outputs.map(p => p.name), ...parallelItems.flatMap(i => Object.keys(i.outputs))]);
+    const outputs = Object.fromEntries([...outputNames].map(name => {
+      const records = parallelItems.map(i => i.outputs[name] ?? null);
+      return [name, { value: records.map(r => r?.value ?? null),
+        ...(records.some(r => r?.artifactId || r?.items) ? { items: records } : {}) }];
+    }));
+    const waiting = parallelItems.some(i => i.status === 'WAITING');
+    const failed = parallelItems.some(i => i.status === 'FAILED' || i.status === 'CANCELLED');
+    const status = waiting ? 'WAITING' : failed ? 'FAILED' : 'SUCCEEDED';
+    // Conditional edges and ways back leaving this ordinary node must still see a verdict. Execution
+    // success remains distinct from assessment: all items must PASS for a batch PASS.
+    const latestVerdict = status === 'SUCCEEDED' && parallelItems.length && parallelItems.every(i => i.verdict)
+      ? (['BLOCKED', 'FAIL', 'NEEDS_FIX', 'PASS'] as const).find(v => parallelItems.some(i => i.verdict === v)) : undefined;
+    return this.commitNodeOrScopeTransition(plan, state.runId, scopeKey, compiledScope, epoch, latest => ({
+      nodeId: node.id,
+      nodeState: { ...latest.nodes[node.id]!, status, outputs, parallelItems, latestVerdict,
+        error: failed ? `${parallelItems.filter(i => i.status === 'FAILED' || i.status === 'CANCELLED').length} parallel item(s) failed or were cancelled` : undefined },
+    }));
   }
 
   private async commitNodeOrScopeTransition(
@@ -2303,6 +2707,37 @@ export class WorkflowRuntime {
       };
     });
   }
+}
+
+function coerceParallelItems(rawItems: unknown): unknown[] {
+  if (Array.isArray(rawItems)) return rawItems;
+  if (typeof rawItems === 'string') {
+    const trimmed = rawItems.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        // fall through to delimiter split
+      }
+    }
+    const parts = trimmed
+      .split(/[\r\n,，;；]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return parts.length > 0 ? parts : [trimmed];
+  }
+  if (rawItems && typeof rawItems === 'object') {
+    const record = rawItems as Record<string, unknown>;
+    for (const key of ['items', 'list', 'topics', 'values', 'data']) {
+      if (Array.isArray(record[key])) return record[key] as unknown[];
+    }
+  }
+  if (rawItems !== undefined && rawItems !== null) {
+    return [rawItems];
+  }
+  return [];
 }
 
 export function createWorkflowRuntime(options: WorkflowRuntimeOptions): WorkflowRuntime {

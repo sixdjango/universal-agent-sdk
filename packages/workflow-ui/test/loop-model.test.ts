@@ -68,11 +68,28 @@ describe('loop description', () => {
       [2, 'again', 'NEEDS_FIX'],
       [3, 'passed', 'PASS'],
     ]);
+    // Outer canvas expands the loop body steps and draws the cycle edge from review back to draft
+    expect(outer.nodes.map((n) => n.id)).toContain('fix/draft');
+    expect(outer.nodes.map((n) => n.id)).toContain('fix/review');
+    expect(outer.edges.filter(edge => edge.type === 'flow').every(edge => edge.data.control
+      ? edge.sourceHandle === 'ctrl-out' && edge.targetHandle === 'ctrl-in'
+      : edge.sourceHandle.startsWith('out:') && edge.targetHandle.startsWith('in:'))).toBe(true);
+    expect(outer.edges.find((e) => e.type === 'loop')).toMatchObject({
+      id: '$loop-back:fix',
+      source: 'fix/review',
+      target: 'fix/draft',
+      data: { label: 'if NEEDS_FIX', tone: 'delivered' },
+    });
 
     const inner = buildCanvasModel({ definition, run, path: ['fix'], scopeKey: '$root/fix:round_2' });
     expect(inner.nodes.find((n) => n.id === 'review')!.data).toMatchObject({ loopRole: 'decider', loopRepeat: 'NEEDS_FIX' });
     expect(inner.nodes.find((n) => n.id === '$input')!.data.loopRole).toBe('start');
-    expect(inner.edges.find((e) => e.type === 'loop')).toMatchObject({ source: 'review', target: '$input', data: { tone: 'delivered' } });
+    expect(inner.edges.find((e) => e.type === 'loop')).toMatchObject({
+      id: '$loop-back',
+      source: 'review',
+      target: 'draft',
+      data: { label: 'if NEEDS_FIX', tone: 'idle' },
+    });
     expect(inner.banner).toMatchObject({ kind: 'loop', title: 'Loop · Fix' });
     expect(buildCanvasModel({ definition }).banner).toBeUndefined();
   });
