@@ -1,7 +1,19 @@
 {
   "name": "@universal-agent/workflow-contract",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Hierarchical DAG contract, topological compiler, and pattern builders for Universal Agent Workflow Kit",
+  "keywords": [
+    "workflow",
+    "dag",
+    "ai-agents",
+    "orchestration",
+    "zod",
+    "schema"
+  ],
+  "homepage": "https://github.com/sixdjango/universal-agent-sdk/tree/main/packages/workflow-contract#readme",
+  "bugs": {
+    "url": "https://github.com/sixdjango/universal-agent-sdk/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

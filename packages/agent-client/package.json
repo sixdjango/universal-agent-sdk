@@ -1,7 +1,20 @@
 {
   "name": "@universal-agent/client",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Standalone Universal ACP Agent Client SDK",
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "coding-agents",
+    "sdk"
+  ],
+  "homepage": "https://github.com/sixdjango/universal-agent-sdk/tree/main/packages/agent-client#readme",
+  "bugs": {
+    "url": "https://github.com/sixdjango/universal-agent-sdk/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

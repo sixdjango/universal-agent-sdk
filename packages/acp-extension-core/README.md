@@ -1,5 +1,7 @@
 # ACP Extension Core
 
+> **In the Universal Agent SDK** this package is `@universal-agent/acp-extension-core`: the shared contract between [`@universal-agent/client`](../agent-client) and its built-in adapters. Both wire prefixes are accepted — `_meta.ua` / `_ua/*` and the upstream `_meta.lody` / `_lody/*` — and public TypeScript names are brand-neutral (`ExtensionCapabilities`, `SubagentEvent`, …) with deprecated `Lody*` aliases. Provenance: [UPSTREAM.md](../../UPSTREAM.md).
+
 Provider-neutral contracts for the Lody extensions that sit on top of [Agent Client Protocol](https://agentclientprotocol.com/) v1.
 
 Lody connects to many agent runtimes, and each one speaks its own dialect. ACP covers the common core, but features such as streaming subagent execution, durable goals, token accounting, and rate limits need a shared and stable description before clients can rely on them. This package is that description: a provider adapter translates its runtime into these contracts once, and any client that has negotiated the corresponding capability can read the result without knowing which runtime produced it.

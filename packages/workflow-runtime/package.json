@@ -1,7 +1,19 @@
 {
   "name": "@universal-agent/workflow-runtime",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Deterministic Hierarchical DAG scheduler, data-edge Context Bundle engine, and stage lifecycle runtime",
+  "keywords": [
+    "workflow",
+    "dag",
+    "scheduler",
+    "ai-agents",
+    "orchestration",
+    "event-sourcing"
+  ],
+  "homepage": "https://github.com/sixdjango/universal-agent-sdk/tree/main/packages/workflow-runtime#readme",
+  "bugs": {
+    "url": "https://github.com/sixdjango/universal-agent-sdk/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

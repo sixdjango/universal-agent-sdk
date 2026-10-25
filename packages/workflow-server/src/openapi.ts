@@ -400,6 +400,7 @@ export function buildOpenApiDocument(options: { serverUrl?: string; version?: st
     info: {
       title: 'Universal Agent workflow server',
       version: options.version ?? '1.0.0',
+      license: { name: 'MIT', identifier: 'MIT' },
       description:
         'Save workflows, register agents and workspaces, start and follow runs, answer gates, talk to the chief, cancel, and read artifacts, intermediate data and agent conversations. The server binds to loopback by default and has no authentication of its own.',
     },

@@ -1,7 +1,19 @@
 {
   "name": "@universal-agent/workflow-node",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Node.js host for the Universal Agent Workflow Kit: SQLite (node:sqlite + Drizzle) stores, UniversalAgentExecutor and ScriptExecutor, and WorkflowHost (workflow library, workspaces with per-run git worktrees, background run service)",
+  "keywords": [
+    "workflow",
+    "ai-agents",
+    "orchestration",
+    "sqlite",
+    "git-worktree",
+    "acp"
+  ],
+  "homepage": "https://github.com/sixdjango/universal-agent-sdk/tree/main/packages/workflow-node#readme",
+  "bugs": {
+    "url": "https://github.com/sixdjango/universal-agent-sdk/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

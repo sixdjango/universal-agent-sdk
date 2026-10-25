@@ -1,7 +1,17 @@
 {
   "name": "@universal-agent/workflow-web",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Prebuilt web app for Universal Agent workflows, built from @universal-agent/workflow-ui (served by @universal-agent/workflow-server)",
+  "keywords": [
+    "workflow",
+    "web-app",
+    "ai-agents",
+    "canvas"
+  ],
+  "homepage": "https://github.com/sixdjango/universal-agent-sdk/tree/main/packages/workflow-web#readme",
+  "bugs": {
+    "url": "https://github.com/sixdjango/universal-agent-sdk/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

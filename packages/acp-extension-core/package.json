@@ -1,6 +1,6 @@
 {
   "name": "@universal-agent/acp-extension-core",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Core ACP extension protocol contracts and helpers for Universal Agent SDK",
   "license": "MIT",
   "repository": {

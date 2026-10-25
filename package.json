@@ -1,6 +1,6 @@
 {
   "name": "universal-agent-sdk",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "description": "Standalone Universal Agent Client SDK and ACP adapters",
   "type": "module",
@@ -15,7 +15,8 @@
     "test:workflow-dist": "pnpm run build:workflow && pnpm --filter @universal-agent/workflow-agents run test:dist",
     "clean": "pnpm -r run clean",
     "release:version": "node scripts/sync-version.mjs",
-    "release:publish": "pnpm --filter @universal-agent/acp-extension-core --filter @universal-agent/client --filter @universal-agent/workflow-contract --filter @universal-agent/workflow-runtime --filter @universal-agent/workflow-node --filter @universal-agent/workflow-agents --filter @universal-agent/workflow-ui --filter @universal-agent/workflow-web --filter @universal-agent/workflow-server publish --access public --no-git-checks"
+    "release:publish": "node scripts/publish-packages.mjs",
+    "release:dry-run": "node scripts/publish-packages.mjs --dry-run"
   },
   "engines": {
     "node": ">=22.0.0"

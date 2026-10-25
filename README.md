@@ -1,119 +1,125 @@
-# Universal Agent Client SDK (`@universal-agent/*`)
+# Universal Agent SDK (`@universal-agent/*`)
 
-A standalone, zero-business-coupled **ACP (Agent Client Protocol)** Client SDK and built-in adapter suite extracted from Lody. Designed for direct integration into any Node.js, Electron, or Daemon host application.
+Run coding agents — Claude Code, Codex, DeepSeek, Kimi, Pi, Grok, Devin or any [ACP](https://agentclientprotocol.com) agent — from your own code, and orchestrate them with scripts into reliable workflows.
 
----
+The SDK has two layers you can use separately:
 
-## Monorepo Architecture
+- **Agent client** (`@universal-agent/client`): start and drive any supported agent over ACP from Node.js or Electron, with permissions, usage, steering, subagents and recorded conversations.
+- **Workflow kit** (`@universal-agent/workflow-*`): describe a flow as a graph of agent, script and human steps; run it with review-driven loops, parallel items, safe concurrent edits to one repository, a supervising Chief agent, and a full record of every step. Use it through a web canvas, a CLI / HTTP API, or embedded in your own code.
 
-```text
-├── packages/
-│   ├── acp-extension-core/               # @universal-agent/acp-extension-core (ACP extension contract & validators)
-│   ├── adapters/
-│   │   ├── acp-extension-claude/         # Claude Code ACP adapter
-│   │   ├── acp-extension-codex/          # OpenAI Codex ACP adapter
-│   │   ├── acp-extension-pi/             # Pi Coding Agent ACP adapter
-│   │   ├── acp-extension-dsh/            # DeepSeek Harness (DSH) ACP adapter
-│   │   ├── acp-extension-grok/           # xAI Grok CLI ACP adapter
-│   │   ├── acp-extension-devin/          # Cognition Devin CLI ACP adapter
-│   │   └── acp-extension-kimi/           # Moonshot Kimi Code ACP adapter
-│   └── agent-client/                     # @universal-agent/client (Host SDK + flat bundled *-acp.js entries)
-└── examples/
-    └── simple-chat.ts                    # Minimal host integration example
-```
+📖 **Start here: [Workflow guide (中文)](docs/workflow-guide.md)** — every concept and how to use it, no source reading needed.
 
 ---
 
-## Key Capabilities
+## Packages
 
-1. **7 Built-in Agents + Custom Standard ACP Support**:
-   - Built-in deep adapters: `claude`, `codex`, `kimi`, `pi`, `deepseek`, `grok`, `devin`.
-   - Standard ACP (`custom`): spawn any local binary, `npx`, or `uvx` command speaking standard ACP over stdio NDJSON.
-2. **BYO CLI + Path Override Resolution**:
-   - Resolves agent binaries in priority order: explicit `executablePath` override $\rightarrow$ process `PATH` $\rightarrow$ cached Login Shell `PATH` (with 3s timeout protection) $\rightarrow$ common install directories (`~/.local/bin`, `~/bin`, `~/.claude/local`, `~/.kimi-code/bin`, `~/.grok/bin`).
-3. **Production-Grade ACP Extensions (Dual Wire Prefix `_meta.ua` & `_meta.lody`)**:
-   - Mid-turn Acknowledged Steer (`_ua/session/steer` & `_lody/session/steer`)
-   - Subagent lifecycle snapshots, streaming output, and cancellation (`_ua/subagents/*`)
-   - Token usage, cost accounting, context window tracking, and rate-limit queries
-   - AskUserQuestion form elicitation bridged into `onRequestPermission`
-   - Ordered runtime configuration application (`mode -> model -> dependent options`)
-4. **Cross-Platform Process Tree & Stream Safety**:
-   - Detached POSIX process groups and Windows `taskkill /T` tree termination (`SIGTERM` $\rightarrow$ grace period $\rightarrow$ `SIGKILL`).
-   - Windows DeepSeek Harness `cmd.exe` 8191-char limit bypass via direct `npx-cli.js` invocation and `windowsHide: true`.
-   - Outermost Loopback `NO_PROXY` (`localhost,127.0.0.1,::1`) injection so user shell proxies never hijack local HTTP MCP connections.
-5. **Unified conversations**: FIFO chats, session leases, permission waits, lossless ACP message/tool records, host extensions and explicit chat crash recovery. Flow Agent calls use the same records and queries, with separate histories for retries, loop rounds and parallel items. Embed the SDK or use the Node SQLite assembly and standalone server API. See [Conversations](docs/conversations.md).
-6. **Chief-guided repairs**: Inspect run-scoped artifacts, guide the original producer, and rerun downstream validation through the existing graph. Hosts can configure command access, diagnostic reads, tool permissions and continuation through SDK options. Commands respect policy and human gates; the SDK run service owns queuing and leases. See [Chief capabilities and host options](docs/chief.md).
-7. **Per-node parallel execution**: Agent, Script and Sub-flow steps can process list items concurrently through a `parallel` property. The existing scheduler keeps per-item retries, permissions, conversations and scoped Chief repairs, aggregates every output in input order, and reports failures accurately. See [Node parallel execution](docs/node-parallel.md).
+| Package | What it is |
+|---|---|
+| [`@universal-agent/client`](packages/agent-client) | ACP host SDK: launch built-in or custom agents, stream updates, handle permissions, record conversations |
+| [`@universal-agent/acp-extension-core`](packages/acp-extension-core) | ACP extension contracts shared by the client and the built-in adapters |
+| [`@universal-agent/workflow-contract`](packages/workflow-contract) | Workflow definition schema, builder, conditions and compiler (runs in Node and browsers) |
+| [`@universal-agent/workflow-runtime`](packages/workflow-runtime) | Scheduler and runtime: steps, loops, parallel items, isolation hooks, Chief, event-sourced run log |
+| [`@universal-agent/workflow-node`](packages/workflow-node) | Node.js host: SQLite stores, agent and script executors, copy-on-write / git isolation, `ua-workflow` step CLI |
+| [`@universal-agent/workflow-agents`](packages/workflow-agents) | Versioned agent profiles and the LLM Chief supervisor |
+| [`@universal-agent/workflow-server`](packages/workflow-server) | HTTP server, `universal-agent-workflow` CLI, JS client and OpenAPI document |
+| [`@universal-agent/workflow-ui`](packages/workflow-ui) | React components: canvas editor, inspector, run trace, Chief dock |
+| [`@universal-agent/workflow-web`](packages/workflow-web) | The prebuilt web app served by the server |
 
----
+Dependency order: `contract ← runtime ← node ← agents ← server`; `ui` builds on `contract` and `runtime`.
 
-## Quick Start
+## Quick start
 
-```typescript
+### Drive an agent
+
+```ts
 import { startAgentSession } from '@universal-agent/client';
 
 const session = await startAgentSession({
-  target: {
-    cliType: 'builtin',
-    agentType: 'claude',
-    // Optional explicit binary path override:
-    // executablePath: '/usr/local/bin/claude',
-  },
+  target: { cliType: 'builtin', agentType: 'claude' },
   workdir: process.cwd(),
-  initialConfig: {
-    modelId: 'default',
+  onUpdateMessage: ({ update }) => {
+    if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') process.stdout.write(update.content.text);
   },
-  onUpdateMessage: (notification) => {
-    const update = notification.update;
-    if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
-      process.stdout.write(update.content.text);
-    }
-  },
-  onRequestPermission: async (_requestId, request) => {
-    const allowOnce = request.options.find((opt) => opt.kind === 'allow_once');
-    return {
-      outcome: allowOnce
-        ? { outcome: 'selected', optionId: allowOnce.optionId }
-        : { outcome: 'cancelled' },
-    };
+  onRequestPermission: async (_id, request) => {
+    const allow = request.options.find((o) => o.kind === 'allow_once');
+    return { outcome: allow ? { outcome: 'selected', optionId: allow.optionId } : { outcome: 'cancelled' } };
   },
 });
-
 await session.prompt([{ type: 'text', text: 'Summarize the project structure.' }]);
 await session.shutdown();
 ```
 
----
+See the [client README](packages/agent-client/README.md) for built-in agents, authentication and options.
 
-## Built-in Agent Authentication & Runtime Dependencies (Host Responsibility)
+### Run workflows with the web canvas and CLI
 
-The SDK **never stores, downloads, or refreshes** user credentials. It forwards the host's `env` and relies on existing local CLI login states:
+```bash
+npm install -g @universal-agent/workflow-server
+universal-agent-workflow --workdir ~/my-project          # http://127.0.0.1:4317
 
-| Agent (`agentType`) | Local CLI Binary | Host Authentication / Environment Requirement | SDK Launch Behavior |
-| :--- | :--- | :--- | :--- |
-| `claude` | `claude` | Local Claude Code login (`claude login`) or `ANTHROPIC_API_KEY` | Spawns `dist/claude-acp.js` with `CLAUDE_CODE_EXECUTABLE` |
-| `codex` | `codex` | Local Codex login or `OPENAI_API_KEY` | Spawns `dist/codex-acp.js` with `CODEX_PATH` |
-| `kimi` | `kimi` | Local Kimi Code login | Spawns `kimi acp` with `KIMI_CODE_NO_AUTO_UPDATE=1` (or `dist/kimi-acp.js`) |
-| `pi` | `pi` (or bundled) | Provider credentials per `@earendil-works/pi-coding-agent` | Spawns `dist/pi-acp.js` with `UA_PI_PATH` (and legacy `LODY_PI_PATH`) |
-| `deepseek` | `npx` | Provider credentials in `DSH_HOME` / `dataDir` | Generates isolated Cordis profile under `dataDir` & spawns `dist/deepseek-acp.js` |
-| `grok` | `grok` | Local Grok CLI login / `XAI_API_KEY` | Spawns `dist/grok-acp.js` with `GROK_PATH` and `GROK_DISABLE_AUTOUPDATER=1` |
-| `devin` | `devin` | Local Devin CLI login | Spawns `dist/devin-acp.js` with `DEVIN_PATH` |
-| `custom` | Custom `command` | Managed by host application | Spawns `command` + `args` directly |
+universal-agent-workflow run my-flow --input request='"Add a dark mode toggle"' --watch
+universal-agent-workflow logs <runId>
+universal-agent-workflow findings <runId>
+```
 
----
+### Embed workflows in your code
 
-## Electron / ASAR Packaging Note
+```ts
+import { createWorkflowBuilder } from '@universal-agent/workflow-contract';
+import { createAgentWorkflowRuntime } from '@universal-agent/workflow-agents';
 
-When bundling `@universal-agent/client` inside an Electron application using `.asar`, ensure `node_modules/@universal-agent/client/dist/**` is unpacked via `asarUnpack`:
-- `resolveBundledAdapterEntry()` automatically rewrites `.asar/` paths to `.asar.unpacked/` when resolving `dist/{claude,codex,kimi,deepseek,grok,devin,pi}-acp.js` for child process spawning.
+const flow = createWorkflowBuilder('fix-and-review')
+  .addWorkflowInput({ name: 'request', type: 'string', required: true })
+  .addAgent({ id: 'fix', name: 'Fix', role: 'developer', agentRef: 'dev', goal: 'Implement the request',
+    inputs: [{ name: 'request', type: 'string', required: true }], writeScopes: ['src'] })
+  .addAgent({ id: 'review', name: 'Review', role: 'reviewer', agentRef: 'dev', goal: 'Review the change', producesAssessment: true })
+  .connectData({ fromNodeId: '$input', fromPort: 'request', toNodeId: 'fix', toPort: 'request' })
+  .connectControl('fix', 'review')
+  .loopBack('review', 'fix', { kind: 'verdict_is', verdict: 'NEEDS_FIX' }, { maxRounds: 3 })
+  .setChief({})
+  .buildDefinition();
 
----
+const { runtime } = createAgentWorkflowRuntime({
+  workdir: '/path/to/repo',
+  agents: [{ id: 'dev', version: '1', name: 'Developer', charter: 'Writes and reviews code.', runtime: { adapter: 'acp', agentType: 'claude' } }],
+});
+const { runId } = await runtime.start({ definition: flow, inputs: { request: 'Add a dark mode toggle' } });
+console.log((await runtime.runUntilSettled(runId)).status);
+```
 
-## Development & Verification
+## What the workflow kit does
+
+- **Graph of steps**: agent, script, human gate, parallel container, sub-flow; data edges pass values and versioned artifacts, control edges order steps and branch on verdicts or outputs (`port_compare`, `all` / `any`, `otherwise`).
+- **Review-driven loops**: draw a way back from a reviewing step; it repeats while the condition holds, up to `maxRounds`, carrying the last round's output and feedback forward.
+- **Parallel items**: run a step or an inline sub-flow for every item of a list, with bounded concurrency and per-item retries.
+- **Safe concurrent edits**: writers work in copy-on-write clones or git worktrees, merge back three ways, pass a merge check, and redo once on a clash.
+- **Chief**: a supervising agent that steps in on failures, stalled loops and questions, within a permission level; talk to it while a run is going.
+- **Hand-over**: reviews can pass with minor findings, steps log known compromises, and `findings` collects everything still open for a person to finish.
+- **Full record**: an append-only run log you can replay, step artifacts, assessments, workspace diffs, step data and every agent conversation.
+
+## Documentation
+
+| | |
+|---|---|
+| [Workflow guide (中文)](docs/workflow-guide.md) | Concepts, step types, conditions, loops, parallel, workspaces, data, Chief, run lifecycle, embedding |
+| [Integration: CLI, HTTP API, step contracts](docs/workflow-integration.md) | Commands, exit codes, API flow, plugging your own process in |
+| [OpenAPI document](docs/workflow-api.openapi.json) | The HTTP API, also served at `GET /api/openapi.json` |
+| [Chief](docs/chief.md) · [Conversations](docs/conversations.md) · [Node parallel](docs/node-parallel.md) | Deep dives |
+| [Releasing](docs/releasing.md) | Versioning, first publish and trusted publishing |
+| [UPSTREAM.md](UPSTREAM.md) | Provenance of the client and adapters |
+
+## Development
 
 ```bash
 pnpm install
-pnpm build
+pnpm build        # every package, in dependency order
 pnpm typecheck
 pnpm test
+pnpm dev:workflow # server + web app with live reload
 ```
+
+Requires Node.js ≥ 22.13 (the workflow host uses `node:sqlite`) and pnpm 10.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

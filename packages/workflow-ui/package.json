@@ -1,7 +1,19 @@
 {
   "name": "@universal-agent/workflow-ui",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "React components for Universal Agent workflows: canvas editor, inspector, run trace, chief dock, and their view models",
+  "keywords": [
+    "workflow",
+    "react",
+    "react-flow",
+    "canvas",
+    "ai-agents",
+    "trace"
+  ],
+  "homepage": "https://github.com/sixdjango/universal-agent-sdk/tree/main/packages/workflow-ui#readme",
+  "bugs": {
+    "url": "https://github.com/sixdjango/universal-agent-sdk/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
