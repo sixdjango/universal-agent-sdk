@@ -18,6 +18,8 @@ export interface CanvasActions {
   refreshRuntime(agentType: string): Promise<void>;
   answer(wait: WaitRequest, answer: string): Promise<void>;
   rerun(nodeId: string, scopeKey?: string): Promise<void>;
+  /** Run view: starts a new run from this step, taking over the steps before it (omit to hide). */
+  fork?(nodeId: string): Promise<void>;
   openArtifact(artifactId: string, title: string): void;
   inspectNode(nodeId: string): void;
   /** Shows a loop body / parallel item graph in place of the current one. */

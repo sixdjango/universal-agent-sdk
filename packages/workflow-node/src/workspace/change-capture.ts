@@ -25,6 +25,8 @@ export interface WorkspaceChanges {
   /** Unified diff from the snapshot taken before the step to the working tree after it. */
   readonly diff: string;
   readonly files: readonly { readonly path: string; readonly status: string }[];
+  /** The repository trees compared, kept in its object store (what a fork replays). */
+  readonly trees?: { readonly before: string; readonly after: string };
 }
 
 export async function git(root: string, args: readonly string[], env?: NodeJS.ProcessEnv): Promise<string> {
@@ -109,5 +111,5 @@ export async function diffTrees(dir: string, from: string, to: string): Promise<
   if (Buffer.byteLength(diff) > MAX_DIFF_BYTES) {
     diff = `${Buffer.from(diff).subarray(0, MAX_DIFF_BYTES).toString('utf8')}\n\n[diff truncated at ${MAX_DIFF_BYTES} bytes; ${files.length} files changed]\n`;
   }
-  return { diff, files };
+  return { diff, files, trees: { before: from, after: to } };
 }

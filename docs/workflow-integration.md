@@ -17,6 +17,9 @@ universal-agent-workflow status <runId>       # 状态、每步结果（含循�
 universal-agent-workflow logs <runId>         # 事件流，运行中持续跟随；--no-follow 只看已有
 universal-agent-workflow findings <runId>     # 还没解决的问题（评审留下的 + 步骤登记的）
 universal-agent-workflow cancel <runId>       # 彻底停止
+universal-agent-workflow fork <runId> --from review --watch
+                                              # 从某步 fork 新 run：前面的步骤接过来（改动合并到当前 HEAD），
+                                              # 这一步和后面的重新跑；--input 只改部分输入，--workspace 换 workspace
 universal-agent-workflow runs --workflow <id>
 universal-agent-workflow openapi > api.json   # 导出 OpenAPI 文档（不需要服务在跑）
 ```
@@ -28,7 +31,7 @@ universal-agent-workflow openapi > api.json   # 导出 OpenAPI 文档（不需�
 ## 2. HTTP API
 
 - OpenAPI 3.1 文档：运行中的服务 `GET /api/openapi.json`，或仓库里的 [`workflow-api.openapi.json`](./workflow-api.openapi.json)（`universal-agent-workflow openapi` 生成）。请求体由服务端校验用的 zod schema 生成，测试保证每个路由都有文档。每个操作有 `operationId`，可直接生成各语言客户端。
-- 典型流程：`PUT /api/workflows/{id}` 保存定义 → `POST /api/runs` 启动 → `GET /api/runs/{id}/stream`（SSE）跟随 → 需要时 `POST …/respond` 回答 Gate、`POST …/chief/messages` 和 Chief 对话、`POST …/cancel` 停止 → `GET /api/artifacts/{id}`、`GET /api/runs/{id}/data`、`GET /api/runs/{id}/conversations` 取产物与证据。
+- 典型流程：`PUT /api/workflows/{id}` 保存定义 → `POST /api/runs` 启动 → `GET /api/runs/{id}/stream`（SSE）跟随 → 需要时 `POST …/respond` 回答 Gate、`POST …/chief/messages` 和 Chief 对话、`POST …/cancel` 停止，`POST …/fork` 从某步开新 run（`{ nodeId, inputs?, workspaces? }`，返回 `{ runId, fromNodeId, inherited }`；上游没完成 400，改动合不上 409）→ `GET /api/artifacts/{id}`、`GET /api/runs/{id}/data`、`GET /api/runs/{id}/conversations` 取产物与证据。
 - 服务默认只监听本机，没有鉴权。
 
 JS/TS 可直接用客户端：

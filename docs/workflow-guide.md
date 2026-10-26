@@ -374,11 +374,31 @@ builder.setChief({ maxLevel: 'operate' }); // 不指定 agentRef 时用内置的
 | 回答 | 弹出的问题 | `POST /api/runs/{id}/respond` | `runtime.respond({ runId, requestId, answer, responderId })` |
 | 和 Chief 对话 | 底部对话框 | `POST /api/runs/{id}/chief/messages` | `postChiefMessage` + `answerChiefMessage` |
 | 从某步重跑 | 节点上的重跑 | `POST /api/runs/{id}/rerun` | `runtime.rerunFromNode()` |
+| 从某步 fork 新 run | 节点上的 fork / Trace 里的 Fork from here | `fork <runId> --from <stepId>` / `POST /api/runs/{id}/fork` | `host.forkRun()`（只用调度器：`runtime.forkRun()`） |
 | 停止 | Stop | `cancel <runId>` / `POST /api/runs/{id}/cancel` | `runtime.cancelRun()`（host：`runs.cancel()`） |
 
 - run 以**只增不改的事件日志**存储，可完整回放（`foldRunLog`）。
 - 服务重启后，没跑完的 run 会被自动接手继续；多个进程靠租约（lease）避免同时驱动同一个 run。
 - 停止是最终状态：正在执行的步骤被中止，迟到的结果不会被记录。
+
+### 13.1 重跑和 fork 的区别
+
+| | 从某步重跑（rerun） | 从某步 fork |
+|---|---|---|
+| run | 同一个 run，旧结果标记为过期 | **新的 run**，原 run 原样保留 |
+| 定义 | run 开始时的定义 | **最新保存的定义**（按步骤 id 对应） |
+| workspace | 继续用原来的 worktree | **新建 worktree，基于仓库当前 HEAD** |
+| 前面的步骤 | 不动 | 结果（输出、结论、循环轮次、并行项、对话记录）接过来，不再执行 |
+
+fork 的规则：
+
+- 被选中的步骤和它下游的步骤重新执行；其余在原 run 里已完成（成功或跳过）的步骤直接接过来。选中的步骤在循环或并行容器里时，从容器开始。
+- 它依赖的上游步骤必须在原 run 里都已完成，否则拒绝（HTTP 400）。步骤 id 在最新定义里找不到也拒绝。
+- 接过来的步骤在原 run 里对文件的改动，按完成顺序**三方合并**到新 worktree 上（`git merge-tree`，二进制文件也能正确合并）。仓库在这期间有了新提交也没关系，只要改动不冲突。
+- 有改动合不上时 fork 失败（HTTP 409），提示是哪一步、哪些文件，不会留下 run 和 worktree。
+- 每次记录改动时会保存改动前后两棵 git 树。树对象被 `git gc` 清理掉时退回用记录的文本 diff 重放；超过 4 MB 被截断的 diff、二进制文件无法这样重放，会报错。
+- 原 run 用的是 in-place workspace（直接在目录里改）时，改动本来就在那个目录里，不再重放。
+- 输入默认沿用原 run 的，可以只改其中几个；workspace 默认用原 run 的那几个。
 
 ## 14. 三种用法
 
@@ -388,11 +408,11 @@ builder.setChief({ maxLevel: 'operate' }); // 不指定 agentRef 时用内置的
 
 - **设计视图**：拖出步骤、连线（顶部是流向线，参数线在选中步骤时显示）、Inspector 编辑字段和条件、画回退线、点进容器编辑内部流程、管理 workspace 槽位和 agent。
 - **运行视图**：Trace（时间线、每步的执行过程、对话、数据、改动）和画布（运行中的节点有动效，循环线显示每一轮）。
-- **Chief 对话框**、**Stop**、回答问题、从某步重跑。
+- **Chief 对话框**、**Stop**、回答问题、从某步重跑、从某步 fork 新 run（新 run 的标题栏显示 `forked from <run> at <step>`）。
 
 ### 14.2 命令行与 HTTP
 
-见 [workflow-integration.md](./workflow-integration.md)：`run / status / logs / findings / cancel / openapi`，退出码适合 CI；HTTP API 有完整的 OpenAPI 文档和 `operationId`。JS 客户端：`import { WorkflowClient } from '@universal-agent/workflow-server/client'`。
+见 [workflow-integration.md](./workflow-integration.md)：`run / status / logs / findings / cancel / fork / openapi`，退出码适合 CI；HTTP API 有完整的 OpenAPI 文档和 `operationId`。JS 客户端：`import { WorkflowClient } from '@universal-agent/workflow-server/client'`。
 
 ### 14.3 嵌入 SDK
 
@@ -410,7 +430,7 @@ const done = await runtime.runUntilSettled(runId);
 console.log(done.status, await runtime.getOpenFindings(runId));
 ```
 
-**带队列和租约的宿主**（服务端用的那一层，适合长期运行的进程）：`createWorkflowHost()` / `WorkflowHost`，提供 workflow 库、workspace 登记、`runs.start / respond / messageChief / cancel / rerunFromNode / resumeInterrupted`。
+**带队列和租约的宿主**（服务端用的那一层，适合长期运行的进程）：`createWorkflowHost()` / `WorkflowHost`，提供 workflow 库、workspace 登记、`runs.start / respond / messageChief / cancel / rerunFromNode / resumeInterrupted`，以及 `forkRun()`（新 worktree + 重放上游改动）。
 
 **只要调度器**（浏览器、测试、自定义存储和执行器）：
 

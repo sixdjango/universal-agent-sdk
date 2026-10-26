@@ -61,6 +61,8 @@ export interface TraceSpan {
   };
   readonly pendingWait?: WaitRequest;
   readonly rerunnable?: boolean;
+  /** A new run can start from this step (a nested step forks from its top-level container). */
+  readonly forkable?: boolean;
   readonly isSlowest?: boolean;
   readonly thinking?: ThinkingTraceModel;
   /** Actual Agent node span; artifact/assessment child spans do not own executions. */
@@ -713,6 +715,7 @@ export function buildTraceModel(input: {
           settled &&
           scopeKey === '$root' &&
           (nodeState?.status === 'SUCCEEDED' || nodeState?.status === 'FAILED'),
+        forkable: scopeKey === '$root' && (nodeState?.status === 'SUCCEEDED' || nodeState?.status === 'FAILED'),
         children: subChildren,
         segments:
           subChildren.length > 0

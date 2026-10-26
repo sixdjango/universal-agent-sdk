@@ -6,7 +6,7 @@ import type { WorkflowRunState } from '@universal-agent/workflow-runtime';
 import { DEFAULT_SERVER_URL, WorkflowClient, WorkflowClientError } from './client';
 import { buildOpenApiDocument } from './openapi';
 
-export const COMMANDS = ['workflows', 'runs', 'run', 'status', 'logs', 'findings', 'cancel', 'openapi'] as const;
+export const COMMANDS = ['workflows', 'runs', 'run', 'status', 'logs', 'findings', 'cancel', 'fork', 'openapi'] as const;
 
 export const COMMANDS_HELP = `Commands (talk to a running server; --server or $UA_WORKFLOW_SERVER, default ${DEFAULT_SERVER_URL}):
   workflows                       List saved workflows
@@ -20,6 +20,11 @@ export const COMMANDS_HELP = `Commands (talk to a running server; --server or $U
   logs <runId>                    Print a run's events and follow them while it runs (--no-follow to stop at the end)
   findings <runId>                Problems still open: what reviews left and issues steps logged
   cancel <runId>                  Stop a run for good
+  fork <runId> --from <stepId>    New run from a step: earlier steps are taken over (their file changes merged
+                                  onto the current HEAD), the step and what follows run again
+      --input, --inputs           Inputs to change (the others are the source run's)
+      --workspace <slot>=<dir|id> Where a slot runs (default: the source run's workspace)
+      --watch                     As for run
   openapi                         Print the HTTP API's OpenAPI document
 
   --json                          Machine-readable output (logs: one JSON event per line)
@@ -62,6 +67,8 @@ export function describeEvent(event: WorkflowEvent): string | null {
   switch (event.type) {
     case 'run.started':
       return `${at}  run started (${event.definitionId})`;
+    case 'run.forked':
+      return `${at}  forked from ${event.sourceRunId} at ${event.fromNodeId}${event.inherited.length ? `, taking over ${event.inherited.map((id) => id.replace(/__loop$/, '')).join(', ')}` : ''}`;
     case 'node.completed': {
       const mark = event.status === 'SUCCEEDED' ? '✓' : event.status === 'FAILED' ? '✗' : '–';
       const loop = /^(.+)__loop$/.exec(event.nodeId);
@@ -182,6 +189,7 @@ export async function runCommand(command: string, args: string[], io: CommandIo)
       workspace: { type: 'string', multiple: true },
       watch: { type: 'boolean', default: false },
       follow: { type: 'boolean', default: true },
+      from: { type: 'string' },
     },
   });
   const client = new WorkflowClient(values.server ?? io.env?.UA_WORKFLOW_SERVER ?? DEFAULT_SERVER_URL);
@@ -190,6 +198,36 @@ export async function runCommand(command: string, args: string[], io: CommandIo)
   const needs = (what: string) => {
     if (!positionals[0]) throw new UsageError(`${command} needs a ${what}`);
     return positionals[0];
+  };
+
+  const readInputs = (): Record<string, unknown> => {
+    const inputs: Record<string, unknown> = values.inputs
+      ? (JSON.parse(readFileSync(resolve(io.cwd ?? process.cwd(), values.inputs), 'utf8')) as Record<string, unknown>)
+      : {};
+    for (const [name, raw] of pairs(values.input, '--input')) inputs[name] = parseValue(raw);
+    return inputs;
+  };
+  const readWorkspaces = async (): Promise<Record<string, string>> => {
+    const workspaces: Record<string, string> = {};
+    for (const [slot, target] of pairs(values.workspace, '--workspace')) {
+      workspaces[slot] = /^ws_/.test(target) ? target : (await client.workspaceFor(resolve(io.cwd ?? process.cwd(), target))).id;
+    }
+    return workspaces;
+  };
+  /** Prints a run that just started, or follows it to the end with --watch. */
+  const started = async (runId: string): Promise<number> => {
+    if (!values.watch) {
+      if (json) print({ runId });
+      else io.out(`${runId}\n`);
+      return 0;
+    }
+    if (!json) io.out(`run ${runId}\n`);
+    const run = await followRun(client, runId, io, { json, follow: true });
+    if (!json) {
+      io.out(`\n`);
+      printStatus(run, false, io);
+    }
+    return exitCodeFor(run.status);
   };
 
   try {
@@ -208,27 +246,21 @@ export async function runCommand(command: string, args: string[], io: CommandIo)
       }
       case 'run': {
         const workflowId = needs('workflow id');
-        const inputs: Record<string, unknown> = values.inputs
-          ? (JSON.parse(readFileSync(resolve(io.cwd ?? process.cwd(), values.inputs), 'utf8')) as Record<string, unknown>)
-          : {};
-        for (const [name, raw] of pairs(values.input, '--input')) inputs[name] = parseValue(raw);
-        const workspaces: Record<string, string> = {};
-        for (const [slot, target] of pairs(values.workspace, '--workspace')) {
-          workspaces[slot] = /^ws_/.test(target) ? target : (await client.workspaceFor(resolve(io.cwd ?? process.cwd(), target))).id;
-        }
-        const { runId } = await client.startRun({ workflowId, inputs, workspaces });
-        if (!values.watch) {
-          if (json) print({ runId });
-          else io.out(`${runId}\n`);
-          return 0;
-        }
-        if (!json) io.out(`run ${runId}\n`);
-        const run = await followRun(client, runId, io, { json, follow: true });
-        if (!json) {
-          io.out(`\n`);
-          printStatus(run, false, io);
-        }
-        return exitCodeFor(run.status);
+        const { runId } = await client.startRun({ workflowId, inputs: readInputs(), workspaces: await readWorkspaces() });
+        return await started(runId);
+      }
+      case 'fork': {
+        const sourceRunId = needs('run id');
+        if (!values.from) throw new UsageError('fork needs --from <stepId>');
+        const inputs = readInputs();
+        const workspaces = await readWorkspaces();
+        const fork = await client.forkRun(sourceRunId, {
+          nodeId: values.from,
+          ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+          ...(Object.keys(workspaces).length > 0 ? { workspaces } : {}),
+        });
+        if (!json && fork.inherited.length > 0) io.err(`taking over ${fork.inherited.map((id) => id.replace(/__loop$/, '')).join(', ')}; running again from ${fork.fromNodeId}\n`);
+        return await started(fork.runId);
       }
       case 'status': {
         const view = await client.getRun(needs('run id'));

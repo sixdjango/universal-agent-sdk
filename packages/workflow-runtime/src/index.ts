@@ -11,5 +11,6 @@ export * from './chief/triggers';
 export * from './state/run-log';
 export * from './memory-adapters';
 export * from './findings';
+export * from './fork';
 export * from './node-data';
 export * from './runtime';

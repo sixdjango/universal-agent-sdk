@@ -96,6 +96,8 @@ export interface CardData extends Record<string, unknown> {
   /** Column index; cards fade in column by column. */
   readonly order: number;
   readonly rerunnable: boolean;
+  /** Run view: a new run can start from this step, taking over the ones before it. */
+  readonly forkable?: boolean;
   /** Design view: ports accept new connections and the card opens the inspector. */
   readonly editable: boolean;
   /** Compiler issues pointing at this node, joined for display. */
@@ -1013,6 +1015,8 @@ export function buildCanvasModel(input: {
         order: columnOf(nodeId),
         // Reruns restart from the top-level graph; inside a round/item they would need its scope.
         rerunnable: settled && path.length === 0 && (nodeState?.status === 'SUCCEEDED' || nodeState?.status === 'FAILED'),
+        // A fork leaves this run alone, so it needs no settled run; it forks from containers at the top level.
+        forkable: path.length === 0 && (nodeState?.status === 'SUCCEEDED' || nodeState?.status === 'FAILED'),
         editable,
         ...(nodeIssues.has(nodeId) ? { issue: nodeIssues.get(nodeId)!.join('\n') } : {}),
       },

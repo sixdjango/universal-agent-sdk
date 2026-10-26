@@ -27,4 +27,12 @@ export const RespondBody = z.object({
   responderId: z.string().min(1).default('web'),
 });
 export const RerunBody = z.object({ nodeId: z.string().min(1), scopeKey: z.string().min(1).optional() });
+export const ForkRunBody = z.object({
+  /** Step to run again from; a step inside a loop or parallel container forks from the container. */
+  nodeId: z.string().min(1),
+  /** Inputs to change; the others are the source run's. */
+  inputs: JsonRecord.optional(),
+  /** Workspace id per slot; slots left out use the source run's workspaces. */
+  workspaces: WorkspaceBindingsSchema.optional(),
+});
 export const ChiefMessageBody = z.object({ text: z.string().trim().min(1).max(8000), authorId: z.string().min(1).default('web') });

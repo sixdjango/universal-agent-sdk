@@ -529,6 +529,16 @@ export function App() {
           fail(err);
         }
       },
+      async fork(nodeId) {
+        if (!run) return;
+        try {
+          const { runId } = await api.forkRun(run.runId, nodeId);
+          navigate({ workflowId: run.definition.id, runId });
+          setRuns(await api.listRuns(run.definition.id));
+        } catch (err) {
+          fail(err);
+        }
+      },
       openArtifact(artifactId, title) {
         api
           .readArtifact(artifactId)
@@ -628,8 +638,9 @@ export function App() {
     }
   };
 
+  const forkedFrom = run?.events.find((e) => e.type === 'run.forked');
   const subtitle = run
-    ? `Run ${run.runId.slice(-8)} · started ${timeAgo(run.createdAtMs)} · ${Object.keys(run.attempts).length} attempt${Object.keys(run.attempts).length === 1 ? '' : 's'}${
+    ? `Run ${run.runId.slice(-8)}${forkedFrom?.type === 'run.forked' ? ` · forked from ${forkedFrom.sourceRunId.slice(-8)} at ${forkedFrom.fromNodeId.replace(/__loop$/, '')}` : ''} · started ${timeAgo(run.createdAtMs)} · ${Object.keys(run.attempts).length} attempt${Object.keys(run.attempts).length === 1 ? '' : 's'}${
         Object.keys(run.workspaces).length > 0
           ? ` · in ${Object.values(run.workspaces)
               .map((w) => (Object.keys(run.workspaces).length > 1 ? `${w.slot}: ` : '') + (w.name ?? w.path) + (w.branch ? ` (${w.branch})` : ''))
@@ -952,6 +963,7 @@ export function App() {
           onToggleTheme={toggleTheme}
           onOpenArtifact={actions.openArtifact}
           onRerun={actions.rerun}
+          onFork={(nodeId: string) => void actions.fork?.(nodeId)}
           onAnswer={actions.answer}
           conversationReader={conversationReader}
           dataReader={nodeDataReader}
@@ -1041,7 +1053,7 @@ export function App() {
       {run && inspectedExecution && <div className="trace-shell trace-execution-overlay" data-theme={theme}>
         <NodeExecutionDetails key={`${run.runId}:${scopeKey}:${inspectedExecution.nodeId}`} span={inspectedExecution}
           runId={run.runId} runActive={stream.active} conversationReader={conversationReader} dataReader={nodeDataReader}
-          onClose={() => setInspect(null)} onOpenArtifact={actions.openArtifact} onRerun={actions.rerun} onAnswer={actions.answer} />
+          onClose={() => setInspect(null)} onOpenArtifact={actions.openArtifact} onRerun={actions.rerun} onFork={(nodeId: string) => void actions.fork?.(nodeId)} onAnswer={actions.answer} />
       </div>}
 
       {definition && (

@@ -102,6 +102,18 @@ export class WorkflowClient {
     return this.request('POST', '/api/runs', { workflowId: input.workflowId, inputs: input.inputs ?? {}, workspaces: input.workspaces ?? {} });
   }
 
+  /**
+   * Forks a run from a step: earlier steps are taken over (with their file changes merged onto
+   * the current HEAD), `nodeId` and what follows run again. `inputs` changes some inputs;
+   * `workspaces` maps slots to workspace ids (default: the source run's).
+   */
+  forkRun(
+    runId: string,
+    input: { nodeId: string; inputs?: Record<string, unknown>; workspaces?: Record<string, string> }
+  ): Promise<{ runId: string; fromNodeId: string; inherited: string[] }> {
+    return this.request('POST', `/api/runs/${encodeURIComponent(runId)}/fork`, input);
+  }
+
   getRun(runId: string): Promise<RunView> {
     return this.request('GET', `/api/runs/${encodeURIComponent(runId)}`);
   }

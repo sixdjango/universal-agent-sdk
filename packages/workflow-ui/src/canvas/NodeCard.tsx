@@ -9,6 +9,7 @@ import {
   LoopIcon,
   OutputsIcon,
   ParallelIcon,
+  ForkIcon,
   RerunIcon,
   ReviewIcon,
   ScriptIcon,
@@ -462,6 +463,17 @@ export function NodeCard({ id, data: raw }: NodeProps) {
               onClick={() => void actions.rerun(data.nodeId)}
             >
               <RerunIcon />
+            </button>
+          )}
+          {data.forkable && actions.fork && (
+            <button
+              type="button"
+              className="icon-btn nodrag"
+              title="Fork from here: a new run that takes over the steps before this one"
+              aria-label="Fork a new run from here"
+              onClick={() => void actions.fork!(data.nodeId)}
+            >
+              <ForkIcon />
             </button>
           )}
           {data.issue && (

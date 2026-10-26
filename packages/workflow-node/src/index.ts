@@ -43,6 +43,7 @@ export * from './workspace/change-capture';
 export * from './workspace/fork';
 export * from './workspace/git-worktree';
 export * from './workspace/local-workspace-manager';
+export * from './workspace/replay';
 
 export interface CreateNodeWorkflowRuntimeOptions {
   readonly workdir: string;

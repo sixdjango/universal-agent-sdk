@@ -1295,6 +1295,102 @@
         }
       }
     },
+    "/api/runs/{id}/fork": {
+      "post": {
+        "operationId": "forkRun",
+        "summary": "Fork a run from a step",
+        "description": "Starts a new run on the workflow as it is saved now. Steps before `nodeId` are taken over from this run (results, loop rounds, outputs) and `nodeId` and everything after it run again; a step inside a loop or parallel container forks from the container. Workspaces are bound afresh (git-worktree workspaces get new worktrees at the current HEAD) and the taken-over steps' file changes are merged three-way onto them. 400 when a step the fork point depends on did not finish in this run; 409 when an earlier change no longer merges onto the current code (nothing is created).",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForkRunBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "fromNodeId": {
+                      "type": "string"
+                    },
+                    "inherited": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{id}/respond": {
       "post": {
         "operationId": "respondToRun",
@@ -4915,6 +5011,29 @@
           "scopeKey": {
             "type": "string",
             "minLength": 1
+          }
+        },
+        "required": [
+          "nodeId"
+        ]
+      },
+      "ForkRunBody": {
+        "$id": "#/components/schemas/ForkRunBody",
+        "type": "object",
+        "properties": {
+          "nodeId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "inputs": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "workspaces": {
+            "$ref": "#/components/schemas/WorkspaceBindings"
           }
         },
         "required": [

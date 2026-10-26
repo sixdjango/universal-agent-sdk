@@ -25,7 +25,7 @@ universal-agent-workflow --workdir ~/my-project
 | `--home` | `$UNIVERSAL_AGENT_HOME` or `~/.universal-agent` | Data directory (database, blobs, worktrees) |
 | `--allow-host` | | Extra `Host` header to accept (repeatable), e.g. behind a proxy |
 
-The web app at the same address edits workflows (canvas, inspector, loops, containers, agents, workspaces) and follows runs (trace, live canvas, conversations, data, findings), with a Chief chat box and a Stop button. Runs left running when the server stopped are picked up again on start.
+The web app at the same address edits workflows (canvas, inspector, loops, containers, agents, workspaces) and follows runs (trace, live canvas, conversations, data, findings), with a Chief chat box, a Stop button, and "Fork from here" on finished steps. Runs left running when the server stopped are picked up again on start.
 
 ## Command line
 
@@ -42,6 +42,8 @@ universal-agent-workflow status <runId>                      # status, every ste
 universal-agent-workflow logs <runId> [--no-follow]          # events; follows while the run is going
 universal-agent-workflow findings <runId>                    # problems still open
 universal-agent-workflow cancel <runId>
+universal-agent-workflow fork <runId> --from <stepId> [--watch]  # new run from a step: earlier steps taken over,
+                                                             # their changes merged onto the current HEAD
 universal-agent-workflow runs [--workflow <id>] [--limit n]
 universal-agent-workflow openapi > api.json                  # no server needed
 ```
@@ -57,7 +59,7 @@ The full description is served at `GET /api/openapi.json` (OpenAPI 3.1, request 
 | Workflows | `GET/POST /api/workflows`, `GET/PUT /api/workflows/{id}`, `PUT …/workspace-bindings`, `PUT …/layout` |
 | Agents & engines | `GET/POST /api/agents`, `GET /api/runtimes`, `POST /api/runtimes/{agentType}/refresh` |
 | Workspaces | `GET/POST /api/workspaces`, `PATCH/DELETE /api/workspaces/{id}` |
-| Runs | `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{id}`, `GET /api/runs/{id}/stream` (SSE), `POST …/respond`, `POST …/chief/messages`, `POST …/rerun`, `POST …/cancel` |
+| Runs | `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{id}`, `GET /api/runs/{id}/stream` (SSE), `POST …/respond`, `POST …/chief/messages`, `POST …/rerun`, `POST …/fork`, `POST …/cancel` |
 | Evidence | `GET /api/runs/{id}/findings`, `GET /api/runs/{id}/data`, `GET /api/runs/{id}/conversations`, `GET /api/artifacts/{id}` |
 | Conversations | `/api/conversations/…` (chats with agents outside workflows) |
 
@@ -82,7 +84,7 @@ for await (const item of client.followRun(runId)) {
 console.log((await client.getRun(runId)).run.status, await client.listFindings(runId));
 ```
 
-Also: `listWorkflows`, `getWorkflow`, `listRuns`, `cancelRun`, `respond`, `messageChief`, `listWorkspaces`, `openApi`. Errors are `WorkflowClientError` with the HTTP `status` (0 when the server is unreachable).
+Also: `listWorkflows`, `getWorkflow`, `listRuns`, `cancelRun`, `forkRun(runId, { nodeId, inputs?, workspaces? })`, `respond`, `messageChief`, `listWorkspaces`, `openApi`. Errors are `WorkflowClientError` with the HTTP `status` (0 when the server is unreachable).
 
 ## Embedding
 

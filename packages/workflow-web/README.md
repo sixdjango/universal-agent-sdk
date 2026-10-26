@@ -25,7 +25,7 @@ The app calls the API on the same origin (`./api/…`). To build your own app in
 ## What's in the app
 
 - **Design**: workflows list, canvas editing (steps, flow and parameter lines, way-back loops, containers opened in place, conditions), inspector, agents and engines, workspaces, chief settings.
-- **Runs**: start with inputs and workspaces, trace timeline, live canvas, execution steps, agent conversations, step data, findings, answering questions, rerunning a step, Stop, and a chat with the Chief.
+- **Runs**: start with inputs and workspaces, trace timeline, live canvas, execution steps, agent conversations, step data, findings, answering questions, rerunning a step, forking a new run from a step, Stop, and a chat with the Chief.
 
 ## License
 

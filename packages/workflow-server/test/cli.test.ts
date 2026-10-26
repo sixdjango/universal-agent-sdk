@@ -112,6 +112,30 @@ describe('CLI and OpenAPI', () => {
     expect((await cli(url, 'cancel', runId)).out).toContain('SUCCEEDED');
   });
 
+  it('forks a run from a step, taking over the steps before it', async () => {
+    const { url, workdir } = await serve();
+    const client = new WorkflowClient(url);
+    await client.saveWorkflow(flow('essay'));
+    const source = /^run (\S+)/.exec((await cli(url, 'run', 'essay', '--input', 'topic=tides', '--workspace', `main=${workdir}`, '--watch')).out)![1]!;
+
+    const forked = await cli(url, 'fork', source, '--from', 'review', '--watch');
+    expect(forked.code).toBe(0);
+    expect(forked.err).toBe('taking over draft; running again from review\n');
+    expect(forked.out).toMatch(new RegExp(`forked from ${source} at review, taking over draft`));
+    expect(forked.out).toMatch(/✓ review succeeded · PASS/);
+    expect(forked.out).not.toMatch(/✓ draft succeeded/);
+    const runId = /^run (\S+)/.exec(forked.out)![1]!;
+    expect(runId).not.toBe(source);
+    expect((await client.getRun(runId)).run.inputs).toEqual({ topic: 'tides' });
+
+    const usage = await cli(url, 'fork', source);
+    expect(usage.code).toBe(64);
+    expect(usage.err).toMatch(/fork needs --from <stepId>/);
+    const unknown = await cli(url, 'fork', source, '--from', 'nope');
+    expect(unknown.code).toBe(1);
+    expect(unknown.err).toMatch(/Step "nope" is not in the workflow/);
+  });
+
   it('exits 1 for a failed run, 3 for one waiting on an answer, and cancels a waiting run', async () => {
     const { url } = await serve();
     const client = new WorkflowClient(url);

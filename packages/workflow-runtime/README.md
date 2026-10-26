@@ -74,7 +74,9 @@ An executor returns `{ status: 'COMPLETED', outputs?, artifacts?, assessment?, c
 | `runUntilSettled(runId, { signal? })` | Drives it until `SUCCEEDED`, `FAILED`, `CANCELLED` or `WAITING` |
 | `resume(runId)` | Continues a run (e.g. after a restart) |
 | `respond({ runId, requestId, answer, responderId })` | Answers a gate or question |
-| `rerunFromNode({ runId, nodeId, scopeKey? })` | Reruns a step and everything downstream of it |
+| `rerunFromNode({ runId, nodeId, scopeKey? })` | Reruns a step and everything downstream of it, in the same run |
+| `planFork({ sourceRunId, nodeId, definition? })` | What forking a run from a step would take over and run again, and the workspace changes of the taken-over steps (`RunForkPlan`); throws `RunForkError` when a step it depends on did not finish |
+| `forkRun({ sourceRunId, nodeId, definition?, inputs?, workspaces?, runId? })` | A new run that takes over the source run's results up to the step (outputs, verdicts, loop rounds, items) and runs it and everything downstream again; the source run is untouched. Replaying file changes is the host's job (`WorkflowHost.forkRun` in workflow-node) |
 | `cancelRun({ runId })` | Stops the run for good; late results are dropped (`RunCancelledError`) |
 | `postChiefMessage` / `answerChiefMessage` / `replyToChiefMessage` / `applyHeldChiefCommands` | Talk to the chief, also while steps execute |
 | `getOpenFindings(runId)` | Problems still open: each review's latest findings plus issues steps logged |

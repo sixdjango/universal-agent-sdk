@@ -171,6 +171,8 @@ export interface ExecutionChanges {
   /** Unified diff; empty when nothing changed. */
   readonly diff: string;
   readonly files: readonly { readonly path: string; readonly status: string }[];
+  /** Git trees of the repository before and after, when the host can tell (lets a fork replay the change). */
+  readonly trees?: { readonly before: string; readonly after: string };
 }
 
 /** Changes recorded on an attempt; the diff itself lives in an artifact. */
@@ -181,6 +183,8 @@ export interface AttemptChanges {
   readonly outOfScope?: readonly string[];
   /** Ran in its own copy of the workspace and was merged back. */
   readonly isolated?: boolean;
+  /** Git trees of the repository before and after the change. */
+  readonly trees?: { readonly before: string; readonly after: string };
 }
 
 export interface NodeAttemptRecord {

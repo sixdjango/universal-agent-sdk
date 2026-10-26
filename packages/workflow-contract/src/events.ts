@@ -257,6 +257,15 @@ export type WorkflowEvent =
       readonly timestampMs: number;
     }
   | {
+      /** The run was forked from another run: `inherited` steps were taken over, the rest runs again. */
+      readonly type: 'run.forked';
+      readonly runId: string;
+      readonly sourceRunId: string;
+      readonly fromNodeId: string;
+      readonly inherited: readonly string[];
+      readonly timestampMs: number;
+    }
+  | {
       readonly type: 'run.finished';
       readonly runId: string;
       readonly status: 'SUCCEEDED' | 'FAILED' | 'CANCELLED';

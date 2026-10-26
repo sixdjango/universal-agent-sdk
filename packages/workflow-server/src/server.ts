@@ -23,6 +23,7 @@ import {
   ChiefMessageBody,
   CreateWorkspaceBody,
   LayoutSchema,
+  ForkRunBody,
   RerunBody,
   RespondBody,
   SaveWorkflowBody,
@@ -305,6 +306,17 @@ export async function createWorkflowServer(options: WorkflowServerOptions): Prom
     const body = parse(RerunBody, request.body);
     await runs.rerunFromNode({ runId: request.params.id, ...body });
     return reply.code(202).send({ accepted: true });
+  });
+
+  /**
+   * A new run from a step of this one: earlier steps' results and file changes are taken over
+   * (the changes merged onto fresh worktrees at the current HEAD), the step and what follows run again.
+   */
+  app.post<{ Params: { id: string } }>('/api/runs/:id/fork', async (request, reply) => {
+    const body = parse(ForkRunBody, request.body);
+    const state = await host.forkRun({ sourceRunId: request.params.id, ...body });
+    const forked = state.events.find((e) => e.type === 'run.forked');
+    return reply.code(202).send({ runId: state.runId, ...(forked?.type === 'run.forked' ? { fromNodeId: forked.fromNodeId, inherited: forked.inherited } : {}) });
   });
 
   /**

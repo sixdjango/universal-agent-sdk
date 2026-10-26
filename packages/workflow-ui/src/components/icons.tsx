@@ -77,6 +77,14 @@ export const RerunIcon = () => (
     <path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.8v2.8h-2.8" />
   </Svg>
 );
+export const ForkIcon = () => (
+  <Svg size={14}>
+    <circle cx="4.5" cy="3.5" r="1.5" />
+    <circle cx="4.5" cy="12.5" r="1.5" />
+    <circle cx="11.5" cy="5.5" r="1.5" />
+    <path d="M4.5 5v6M11.5 7c0 2.5-2 3-7 4" />
+  </Svg>
+);
 export const CheckIcon = () => (
   <Svg size={14}>
     <path d="M3.5 8.5l3 3 6-7" />

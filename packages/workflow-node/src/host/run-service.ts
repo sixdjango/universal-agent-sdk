@@ -4,6 +4,8 @@ import {
   CHIEF_WAIT_NODE_ID,
   ChiefUnavailableError,
   type Clock,
+  type ForkWorkflowRunInput,
+  type RunForkPlan,
   type RunLogEntry,
   SystemClock,
   type WorkflowRunState,
@@ -112,10 +114,38 @@ export class RunService {
     return state;
   }
 
+  /** What forking `sourceRunId` from `nodeId` would take over and run again (see `fork`). */
+  async planFork(input: Pick<ForkWorkflowRunInput, 'sourceRunId' | 'nodeId' | 'definition'>): Promise<RunForkPlan> {
+    await this.get(input.sourceRunId);
+    return this.runtime.planFork(input).catch((err: unknown) => {
+      throw invalid(err instanceof Error ? err.message : String(err));
+    });
+  }
+
+  /**
+   * Starts a run that takes over `sourceRunId`'s results up to `nodeId` and runs that step and
+   * everything after it again, and drives it in the background. Workspaces are used as given:
+   * replaying the earlier steps' file changes is up to the caller (`WorkflowHost.forkRun` does).
+   */
+  async fork(input: ForkWorkflowRunInput): Promise<WorkflowRunState> {
+    await this.get(input.sourceRunId);
+    const state = await this.runtime.forkRun(input).catch((err: unknown) => {
+      if (err instanceof Error && (err.name === 'RunForkError' || err.name === 'WorkspaceBindingError')) throw invalid(err.message);
+      throw err;
+    });
+    this.drive(state.runId, 'continue');
+    return state;
+  }
+
   async get(runId: string): Promise<WorkflowRunState> {
     const state = await this.runtime.store.getRun(runId);
     if (!state) throw notFound(`Run "${runId}"`);
     return state;
+  }
+
+  /** Text of an artifact a run stored (e.g. a step's diff). */
+  readArtifactText(artifactId: string): Promise<string> {
+    return this.runtime.artifacts.readText(artifactId);
   }
 
   readLog(runId: string, afterSeq: number): Promise<readonly RunLogEntry[]> {

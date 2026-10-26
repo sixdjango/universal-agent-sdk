@@ -5,6 +5,7 @@ import {
   ChiefMessageBody,
   CreateWorkspaceBody,
   LayoutSchema,
+  ForkRunBody,
   RerunBody,
   RespondBody,
   SaveWorkflowBody,
@@ -37,6 +38,7 @@ function generatedSchemas(): Record<string, Schema> {
     UpdateWorkspaceBody,
     RespondBody,
     RerunBody,
+    ForkRunBody,
     ChiefMessageBody,
     CreateConversationBody: ConversationRequestSchemas.Create,
     UpdateConversationBody: ConversationRequestSchemas.Update,
@@ -331,6 +333,20 @@ function operations(): Record<string, Operation> {
       responses: { 200: inline({ type: 'object', properties: { run: ref('RunState') } }), 404: 'Error' },
     },
     'post /api/runs/{id}/rerun': { id: 'rerunFromNode', summary: 'Run again from a step', tag: 'Runs', body: 'RerunBody', responses: { 202: inline({ type: 'object', properties: { accepted: { type: 'boolean' } } }), 409: 'Error' } },
+    'post /api/runs/{id}/fork': {
+      id: 'forkRun',
+      summary: 'Fork a run from a step',
+      description:
+        'Starts a new run on the workflow as it is saved now. Steps before `nodeId` are taken over from this run (results, loop rounds, outputs) and `nodeId` and everything after it run again; a step inside a loop or parallel container forks from the container. Workspaces are bound afresh (git-worktree workspaces get new worktrees at the current HEAD) and the taken-over steps\' file changes are merged three-way onto them. 400 when a step the fork point depends on did not finish in this run; 409 when an earlier change no longer merges onto the current code (nothing is created).',
+      tag: 'Runs',
+      body: 'ForkRunBody',
+      responses: {
+        202: inline({ type: 'object', properties: { runId: str, fromNodeId: str, inherited: { type: 'array', items: str } } }),
+        400: 'Error',
+        404: 'Error',
+        409: 'Error',
+      },
+    },
     'post /api/runs/{id}/respond': { id: 'respondToRun', summary: 'Answer a gate decision or an agent question', tag: 'Runs', body: 'RespondBody', responses: { 202: inline({ type: 'object', properties: { accepted: { type: 'boolean' } } }), 400: 'Error' } },
     'post /api/runs/{id}/chief/messages': {
       id: 'messageChief',

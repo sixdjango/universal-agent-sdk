@@ -37,6 +37,7 @@ import {
   SystemClock,
 } from './memory-adapters';
 import { ISSUES_COLLECTION, issueFindings, type OpenFinding, openAssessmentFindings, sortFindings } from './findings';
+import { belongsToRootStep, planRunFork, RunForkError, type RunForkPlan } from './fork';
 import { createNodeDataAccess, InMemoryNodeDataStore, type NodeDataStore } from './node-data';
 import {
   type AgentAdapter,
@@ -115,6 +116,19 @@ export interface StartWorkflowRunInput {
    * declared slot must be bound; unbound optional slots use the executor's default directory.
    */
   readonly workspaces?: Readonly<Record<string, string | Omit<RunWorkspaceBinding, 'slot'>>>;
+}
+
+export interface ForkWorkflowRunInput {
+  readonly sourceRunId: string;
+  /** Step to run again from; a step inside a loop or parallel container forks from that container. */
+  readonly nodeId: string;
+  /** Definition the fork runs, matched to the source run by step id (default: the source run's). */
+  readonly definition?: WorkflowDefinition | CompiledWorkflowPlan;
+  /** Workflow inputs (default: the source run's). */
+  readonly inputs?: Record<string, unknown>;
+  /** Directory per workspace slot, as in `start` (default: the source run's). */
+  readonly workspaces?: StartWorkflowRunInput['workspaces'];
+  readonly runId?: string;
 }
 
 export class WorkspaceBindingError extends Error {
@@ -563,6 +577,7 @@ export class WorkflowRuntime {
       const extra = {
         ...(outOfScope.length > 0 ? { outOfScope } : {}),
         ...(input.isolated ? { isolated: true } : {}),
+        ...(input.changes.trees ? { trees: input.changes.trees } : {}),
       };
       if (input.changes.files.length > 0 || wantsPort) {
         const summary = `${input.changes.files.length} file(s) changed`;
@@ -648,6 +663,90 @@ export class WorkflowRuntime {
       createdAtMs: now,
     };
 
+    return await this.store.createRun(initialState);
+  }
+
+  /**
+   * What forking `sourceRunId` from `nodeId` would do: the steps taken over, the steps run
+   * again, and the workspace changes of the taken-over steps (which a host replays into the
+   * fork's workspaces before driving it). Throws `RunForkError` when the fork is not possible.
+   */
+  async planFork(input: Pick<ForkWorkflowRunInput, 'sourceRunId' | 'nodeId' | 'definition'>): Promise<RunForkPlan> {
+    const source = await this.store.getRun(input.sourceRunId);
+    if (!source) throw new RunForkError(`Run "${input.sourceRunId}" not found`);
+    return planRunFork(source, this.ensurePlan(input.definition ?? source.definition), input.nodeId);
+  }
+
+  /**
+   * Starts a new run that takes over the source run's results up to `nodeId` and runs that step
+   * and everything downstream of it again (see `planFork`). The source run is left as it was.
+   * Replaying the taken-over steps' file changes is the host's job (workflow-node does it).
+   */
+  async forkRun(input: ForkWorkflowRunInput): Promise<WorkflowRunState> {
+    const source = await this.store.getRun(input.sourceRunId);
+    if (!source) throw new RunForkError(`Run "${input.sourceRunId}" not found`);
+    const plan = this.ensurePlan(input.definition ?? source.definition);
+    const fork = planRunFork(source, plan, input.nodeId);
+    const runId = input.runId ?? this.idGenerator.nextId('run');
+    const now = this.clock.nowMs();
+    const inputs = input.inputs ?? source.inputs;
+    const workspaces = bindRunWorkspaces(
+      plan.definition,
+      input.workspaces ?? Object.fromEntries(Object.entries(source.workspaces).map(([slot, { slot: _s, ...binding }]) => [slot, binding]))
+    );
+
+    const sourceRoot = source.scopes.$root!;
+    const rootInputs: Record<string, PortValueRecord> = {};
+    for (const [key, val] of Object.entries(inputs)) rootInputs[key] = { value: val };
+    const initialRoot = createInitialScopeState(plan.rootScope, '$root', rootInputs);
+    const inherited = new Set(fork.inherited);
+    const nodes = { ...initialRoot.nodes };
+    for (const id of inherited) nodes[id] = { ...sourceRoot.nodes[id]!, activeWaitRequestId: undefined };
+    // Workflow outputs a taken-over step already produced.
+    const rootOutputs = { ...initialRoot.outputs };
+    for (const edge of plan.rootScope.incomingDataEdges['$output'] ?? []) {
+      const value = sourceRoot.outputs[edge.toPort];
+      if (inherited.has(edge.fromNodeId) && value) rootOutputs[edge.toPort] = value;
+    }
+    const rootScope = { ...initialRoot, nodes, outputs: rootOutputs };
+
+    const takenOver = (scopeKey: string, nodeId: string) => fork.inherited.some((id) => belongsToRootStep(scopeKey, nodeId, id));
+    const scopes: Record<string, WorkflowRunState['scopes'][string]> = { $root: rootScope };
+    for (const [key, scope] of Object.entries(source.scopes)) if (key !== '$root' && takenOver(key, '')) scopes[key] = scope;
+    const attempts: Record<string, WorkflowRunState['attempts'][string]> = {};
+    const assessments: Record<string, WorkflowRunState['assessments'][string]> = {};
+    const manifests: Record<string, WorkflowRunState['manifests'][string]> = {};
+    for (const attempt of Object.values(source.attempts)) {
+      if (!takenOver(attempt.scopeKey, attempt.nodeId)) continue;
+      attempts[attempt.attemptId] = { ...attempt, runId };
+      const assessment = attempt.assessmentId ? source.assessments[attempt.assessmentId] : undefined;
+      if (assessment) assessments[assessment.assessmentId] = { ...assessment, runId };
+      const manifest = attempt.contextManifestId ? source.manifests[attempt.contextManifestId] : undefined;
+      if (manifest) manifests[manifest.manifestId] = { ...manifest, runId };
+    }
+
+    const initialState: RunSnapshotState = {
+      runId,
+      definition: plan.definition,
+      definitionDigest: plan.definitionDigest,
+      status: 'RUNNING',
+      inputs: { ...inputs },
+      outputs: Object.fromEntries(Object.entries(rootScope.outputs).map(([k, v]) => [k, v.value])),
+      scopes,
+      attempts,
+      manifests,
+      assessments,
+      waitRequests: {},
+      readReceipts: [],
+      events: [
+        { type: 'run.started', runId, definitionId: plan.definition.id, definitionDigest: plan.definitionDigest, timestampMs: now },
+        { type: 'run.forked', runId, sourceRunId: source.runId, fromNodeId: fork.fromNodeId, inherited: fork.inherited, timestampMs: now },
+      ],
+      workspaces,
+      pinnedAgents: { ...source.pinnedAgents },
+      chief: EMPTY_CHIEF_RUN_STATE,
+      createdAtMs: now,
+    };
     return await this.store.createRun(initialState);
   }
 

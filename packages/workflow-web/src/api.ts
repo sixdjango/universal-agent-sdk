@@ -105,6 +105,8 @@ export const api = {
   cancelRun: (runId: string) => request<void>(`/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
   rerun: (runId: string, nodeId: string, scopeKey?: string) =>
     request<void>(`/runs/${encodeURIComponent(runId)}/rerun`, { method: 'POST', json: { nodeId, ...(scopeKey ? { scopeKey } : {}) } }),
+  forkRun: (runId: string, nodeId: string) =>
+    request<{ runId: string; fromNodeId: string; inherited: string[] }>(`/runs/${encodeURIComponent(runId)}/fork`, { method: 'POST', json: { nodeId } }),
   readArtifact: (artifactId: string) =>
     request<{ meta: { mediaType: string; sizeBytes: number; summary?: string }; slice: { content: string; hasMore: boolean } }>(
       `/artifacts/${encodeURIComponent(artifactId)}`

@@ -17,7 +17,7 @@ import '@universal-agent/workflow-ui/styles.css'; // once, at your app's entry
 Everything is driven by plain data, so you own state and transport:
 
 1. **Model**: `buildCanvasModel({ definition, run?, layout?, path?, liveProgress?, editable? })` turns a workflow definition — and, in a run, its `WorkflowRunState` — into cards and lines (statuses, verdicts, loop rounds, parallel items, issues).
-2. **View**: `<WorkflowCanvas model={…} />` renders it; cards talk back through `CanvasActionsContext`.
+2. **View**: `<WorkflowCanvas model={…} />` renders it; cards talk back through `CanvasActionsContext` (optional actions such as `fork` show their buttons only when provided).
 3. **Editing**: pure functions return a new definition — `addNode`, `removeNode`, `connect`, `removeEdge`, `setEdgeCondition`, `addPort`, `removePort`, `addWorkspaceSlot`, `renameWorkspaceSlot`, `setSubflowWorkflow`, `expandLoopIntoCycle`, `createBlankWorkflow`, … — which you save however you like (e.g. `PUT /api/workflows/{id}`).
 
 ## A read-only viewer
@@ -66,7 +66,7 @@ For a full editor — inspector, scopes, loop rounds, run controls — follow th
 |---|---|
 | `WorkflowCanvas` | The graph: flow lines (when steps run) and parameter lines (for the selected step), loop edges with their rounds, containers you open in place, snake layout for long flows, live motion on running steps |
 | `Inspector` | Fields of the selected step, edge (conditions incl. `port_compare`, `all` / `any`, loop rounds and exhaustion), workflow (chief, workspaces) |
-| `TraceView` | A run as a timeline: every step, loop round and parallel item with duration, tokens, cost, execution steps, conversation and data |
+| `TraceView` | A run as a timeline: every step, loop round and parallel item with duration, tokens, cost, execution steps, conversation and data; "Rerun from here", and "Fork from here" when you pass `onFork` |
 | `NodeExecutionDetails`, `ThinkingTrace` | One attempt's details; its execution steps (virtualized for long runs) |
 | `NodeConversation`, `ConversationTranscriptView` | A recorded agent conversation (virtualized), messages, tools, permissions |
 | `NodeData` | Data a step saved with `ua-workflow data` |

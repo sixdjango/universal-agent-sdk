@@ -21,6 +21,7 @@ import {
   LoopIcon,
   OutputsIcon,
   ParallelIcon,
+  ForkIcon,
   RerunIcon,
   ReviewIcon,
   ScriptIcon,
@@ -158,6 +159,7 @@ export function NodeExecutionDetails({
   onClose,
   onOpenArtifact,
   onRerun,
+  onFork,
   onAnswer,
   runId,
   runActive = false,
@@ -168,6 +170,8 @@ export function NodeExecutionDetails({
   onClose(): void;
   onOpenArtifact(artifactId: string, title: string): void;
   onRerun(nodeId: string, scopeKey?: string): void;
+  /** Starts a new run from the step, taking over the ones before it (omit to hide). */
+  onFork?(nodeId: string): void;
   onAnswer(wait: WaitRequest, answer: string): Promise<void>;
   runId: string;
   runActive?: boolean;
@@ -369,7 +373,7 @@ export function NodeExecutionDetails({
         </div>
       )}
 
-      {(span.artifactId || (span.rerunnable && span.nodeId)) && (
+      {(span.artifactId || ((span.rerunnable || (span.forkable && onFork)) && span.nodeId)) && (
         <div className="trace-detail-actions">
           {span.artifactId && (
             <button
@@ -383,6 +387,11 @@ export function NodeExecutionDetails({
           {span.rerunnable && span.nodeId && (
             <button type="button" className="btn" onClick={() => onRerun(span.nodeId!, span.scopeKey)}>
               <RerunIcon /> Rerun from here
+            </button>
+          )}
+          {span.forkable && span.nodeId && onFork && (
+            <button type="button" className="btn" title="A new run that takes over the steps before this one" onClick={() => onFork(span.nodeId!)}>
+              <ForkIcon /> Fork from here
             </button>
           )}
         </div>
@@ -401,6 +410,8 @@ export function TraceView(props: {
   onToggleTheme?: () => void;
   onOpenArtifact(artifactId: string, title: string): void;
   onRerun(nodeId: string, scopeKey?: string): void;
+  /** Starts a new run from a step, taking over the ones before it (omit to hide). */
+  onFork?(nodeId: string): void;
   onAnswer(wait: WaitRequest, answer: string): Promise<void>;
   conversationReader?: ConversationReader;
   dataReader?: NodeDataReader;
@@ -695,6 +706,7 @@ export function TraceView(props: {
                 onClose={() => setSelectedSpanId(null)}
                 onOpenArtifact={onOpenArtifact}
                 onRerun={onRerun}
+                {...(props.onFork ? { onFork: props.onFork } : {})}
                 onAnswer={onAnswer}
               />
             )}

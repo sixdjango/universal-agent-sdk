@@ -101,7 +101,8 @@ Agents get the same as MCP tools on the `ua-workflow` server: `data_put`, `data_
 - Steps that may write at the same time as others (or `isolation: 'worktree'`) work in a private copy: an APFS copy-on-write clone of the whole repository on macOS (dependencies and build output included), a git worktree elsewhere. The workspace must be a git repository.
 - When a copy finishes, its changes merge three ways into the workspace as it is by then (`git merge-tree`), never touching the index. If others changed it meanwhile and the slot declares a `mergeCheck` command, that command runs on the merged code in the copy first.
 - A clash (conflict or failed check) redoes the step once in a fresh copy, telling the agent what clashed and where its earlier changes are (`git show <branch>`); a second clash fails the step and keeps its changes on that branch.
-- `LocalWorkspaceManager`, `forkWorkspace`, `snapshotWorkingTree` and `diffTrees` are exported for custom hosts.
+- Each step's recorded changes keep the git trees before and after (`changes.trees`), so they can be replayed later: `replayWorkspaceChanges(dir, changes)` merges them three-way onto a working tree in order, binary files included, falling back to the recorded diff when the trees are gone; nothing is written unless all of them land (`ChangeReplayError` otherwise).
+- `LocalWorkspaceManager`, `forkWorkspace`, `snapshotWorkingTree`, `diffTrees` and `replayWorkspaceChanges` are exported for custom hosts.
 
 ## `WorkflowHost`
 
@@ -117,7 +118,11 @@ const host = await createWorkflowHost({ runtime, db, workdir: process.cwd() });
 host.library.save(definition, { mode: 'upsert' });           // saved workflows
 const workspace = await host.workspaces.create({ path: '/path/to/repo' });
 const run = await host.startRun({ workflowId: definition.id, workspaces: { main: workspace.id } });
-// host.runs: get, list, readLog, respond, messageChief, cancel, rerunFromNode, resumeInterrupted, isActive
+// host.runs: get, list, readLog, respond, messageChief, cancel, rerunFromNode, fork, resumeInterrupted, isActive
+
+// A new run from a step: the latest saved definition, fresh worktrees at the current HEAD with the
+// earlier steps' changes merged on, the step and what follows run again (conflict → WorkflowHostError 'conflict').
+const forked = await host.forkRun({ sourceRunId: run.runId, nodeId: 'review', inputs: { tone: 'formal' } });
 // host.conversations: the ConversationService for chats and recorded agent calls
 await host.close();
 ```
